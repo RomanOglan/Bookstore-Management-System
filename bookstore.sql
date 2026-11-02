@@ -1,0 +1,40 @@
+CREATE DATABASE IF NOT EXISTS Bookstore;
+USE Bookstore;
+
+
+CREATE TABLE IF NOT EXISTS Author (
+    AuthorID INT UNSIGNED AUTO_INCREMENT,
+    AuthorName VARCHAR(50), 
+    PRIMARY KEY (AuthorID)
+);
+
+CREATE TABLE IF NOT EXISTS Category (
+    CategoryID INT UNSIGNED AUTO_INCREMENT,
+    CategoryName VARCHAR(20),
+    PRIMARY KEY (CategoryID)
+);
+
+CREATE TABLE IF NOT EXISTS Books (
+    BookID INT UNSIGNED AUTO_INCREMENT,
+    ISBN INT,
+    Title VARCHAR(50),
+    Description VARCHAR(50),
+    Price DECIMAL(19, 4),
+    Quantity VARCHAR(20),
+    AuthorID INT UNSIGNED,
+    CategoryID INT UNSIGNED,
+    PRIMARY KEY(BookID),
+    FOREIGN KEY (AuthorID) REFERENCES Author (AuthorID),
+    FOREIGN KEY (CategoryID) REFERENCES Category (CategoryID)
+);
+
+CREATE TABLE IF NOT EXISTS Order_Items (
+    BookID INT UNSIGNED,
+    OrderID INT UNSIGNED,
+    Quantity VARCHAR(20),
+    Price DECIMAL(19, 4),
+    PRIMARY KEY (BookID, OrderID),
+    FOREIGN KEY (BookID) REFERENCES Books (BookID)
+);
+
+SHOW TABLEs;
