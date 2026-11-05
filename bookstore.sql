@@ -1,4 +1,5 @@
 CREATE DATABASE IF NOT EXISTS Bookstore;
+DROP TABLE LOAN
 USE Bookstore;
 
 
@@ -20,12 +21,44 @@ CREATE TABLE IF NOT EXISTS Books (
     Title VARCHAR(50),
     Description VARCHAR(50),
     Price DECIMAL(19, 4),
-    Quantity VARCHAR(20),
+    Quantity SMALLINT UNSIGNED,
     AuthorID INT UNSIGNED,
     CategoryID INT UNSIGNED,
     PRIMARY KEY(BookID),
     FOREIGN KEY (AuthorID) REFERENCES Author (AuthorID),
     FOREIGN KEY (CategoryID) REFERENCES Category (CategoryID)
+);
+
+CREATE TABLE IF NOT EXISTS Book_Copies (
+    CopyID INT UNSIGNED AUTO_INCREMENT,
+    Barcode CHAR(15), -- Double check with group how we want to do BarCode--
+    CopyStatus ENUM ("Available", "On-Loan", "Unavailable"), -- Review these options--
+    BookID INT UNSIGNED,
+    PRIMARY KEY(CopyID),
+    FOREIGN KEY (BookID) REFERENCES Books (BookID)
+);
+
+CREATE TABLE IF NOT EXISTS Loans (
+    LoanID INT UNSIGNED AUTO_INCREMENT,
+    BorrowedDate DATE,
+    DueDate DATE,
+    ReturnedDate DATE,
+    -- Removing OverDue fee from table, we will calculate it in the backend using borroed Date and Returned Date (or lack thereof)
+    LoanStatus ENUM ("On-Loan", "Returned", "Late", "Available for Loan"),
+    CopyID INT UNSIGNED,
+    PRIMARY KEY(LoanID),
+    FOREIGN KEY(CopyID) REFERENCES Book_Copies (CopyID)
+    -- Removed BookID from Loans as we can grab it from Book_Copies using CopyID
+);
+
+CREATE TABLE IF NOT EXISTS Users (
+    UserID INT UNSIGNED AUTO_INCREMENT,
+    Name VARCHAR(100),
+    Email VARCHAR(50) UNIQUE NOT NULL,
+    PasswordHash VARCHAR(250) NOT NULL,
+    Role ENUM ("Admin", "Users") NOT NULL,
+    AccountStatus ENUM ("Active", "Unactive") DEFAULT("Active") NOT NULL,
+    PRIMARY KEY(UserID)
 );
 
 CREATE TABLE IF NOT EXISTS Order_Items (
@@ -36,5 +69,15 @@ CREATE TABLE IF NOT EXISTS Order_Items (
     PRIMARY KEY (BookID, OrderID),
     FOREIGN KEY (BookID) REFERENCES Books (BookID)
 );
+
+CREATE TABLE IF NOT EXISTS Orders (
+    OrderID INT UNSIGNED AUTO_INCREMENT,
+    OrderDate DATE,
+    DeliveryType ENUM ("Delivery", "Pick-Up"),
+    UserID INT UNSIGNED,
+    PRIMARY KEY (OrderID),
+    FOREIGN KEY (UserID) REFERENCES Users (UserID)
+);
+
 
 SHOW TABLEs;
