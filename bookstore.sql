@@ -1,5 +1,4 @@
 CREATE DATABASE IF NOT EXISTS Bookstore;
-DROP TABLE LOAN
 USE Bookstore;
 
 
@@ -40,6 +39,7 @@ CREATE TABLE IF NOT EXISTS Book_Copies (
 
 CREATE TABLE IF NOT EXISTS Loans (
     LoanID INT UNSIGNED AUTO_INCREMENT,
+    UserID INT UNSIGNED,
     BorrowedDate DATE,
     DueDate DATE,
     ReturnedDate DATE,
@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS Loans (
     LoanStatus ENUM ("On-Loan", "Returned", "Late", "Available for Loan"),
     CopyID INT UNSIGNED,
     PRIMARY KEY(LoanID),
-    FOREIGN KEY(CopyID) REFERENCES Book_Copies (CopyID)
+    FOREIGN KEY(UserID) REFERENCES Users(UserID),
+    FOREIGN KEY(CopyID) REFERENCES Book_Copies(CopyID)
     -- Removed BookID from Loans as we can grab it from Book_Copies using CopyID
 );
 
@@ -66,8 +67,9 @@ CREATE TABLE IF NOT EXISTS Order_Items (
     OrderID INT UNSIGNED,
     Quantity VARCHAR(20),
     Price DECIMAL(19, 4),
-    PRIMARY KEY (BookID, OrderID),
-    FOREIGN KEY (BookID) REFERENCES Books (BookID)
+    PRIMARY KEY(BookID, OrderID),
+    FOREIGN KEY(BookID) REFERENCES Books(BookID),
+    FOREIGN KEY(OrderID) REFERENCES Orders (OrderID)
 );
 
 CREATE TABLE IF NOT EXISTS Orders (
