@@ -16,8 +16,9 @@ CREATE TABLE IF NOT EXISTS Category (
 
 CREATE TABLE IF NOT EXISTS Books (
     BookID INT UNSIGNED AUTO_INCREMENT,
-    ISBN INT,
+    ISBN INT UNIQUE,
     Title VARCHAR(50),
+    Rating INT, --Adding rating cause its in our dataset so why not--
     Description VARCHAR(50),
     Price DECIMAL(19, 4),
     Quantity SMALLINT UNSIGNED,
@@ -30,7 +31,7 @@ CREATE TABLE IF NOT EXISTS Books (
 
 CREATE TABLE IF NOT EXISTS Book_Copies (
     CopyID INT UNSIGNED AUTO_INCREMENT,
-    Barcode CHAR(15), -- Double check with group how we want to do BarCode--
+    Barcode CHAR(15) UNIQUE, -- Double check with group how we want to do BarCode--
     CopyStatus ENUM ("Available", "On-Loan", "Unavailable"), -- Review these options--
     BookID INT UNSIGNED,
     PRIMARY KEY(CopyID),
