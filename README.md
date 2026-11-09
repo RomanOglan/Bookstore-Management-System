@@ -11,12 +11,12 @@ Using MySQL;
 7. Execute triggers.sql to create the validation trigger.
 
 Run these commands in a new SQL tab to test:
-'''sql
+```sql
 USE Bookstore;
 CALL SearchBooks('Harry');
 CALL PlaceOrder(101, 102, 1, 'Delivery');
 CALL BorrowBook(101, 101);
-'''
+```
 
 
 Using Web;
