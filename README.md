@@ -4,18 +4,19 @@
 Using MySQL;
 1. Install MySQL Server and MySQL Workbench.
 2. Open MySQL Workbench and connect to your local MySQL server.
-3. Open and execute `bookstore.sql` to create the database and tables.
-4. Open and execute `test_data.sql` to populate the database with sample data.
-5. Execute `backend_queries.sql` to run the 10 SQL queries.
-6. Execute `stored_procedures.sql` to create the three stored procedures.
-7. Execute `triggers.sql` to create the validation trigger.
+3. Open and execute bookstore.sq to create the database and tables.
+4. Open and execute test_data.sql to populate the database with sample data.
+5. Execute backend_queries.sql to run the 10 SQL queries.
+6. Execute stored_procedures.sql to create the three stored procedures.
+7. Execute triggers.sql to create the validation trigger.
 
 Run these commands in a new SQL tab to test:
-sql
+'''sql
 USE Bookstore;
 CALL SearchBooks('Harry');
 CALL PlaceOrder(101, 102, 1, 'Delivery');
 CALL BorrowBook(101, 101);
+'''
 
 
 Using Web;
