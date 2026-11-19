@@ -5,6 +5,12 @@ DROP PROCEDURE IF EXISTS PlaceOrder;
 DROP PROCEDURE IF EXISTS BorrowBook;
 DROP PROCEDURE IF EXISTS AddBook;
 DROP PROCEDURE IF EXISTS RestockBook;
+DROP PROCEDURE IF EXISTS ReturnBook;
+DROP PROCEDURE IF EXISTS MarkOverdueLoans;
+DROP PROCEDURE IF EXISTS UpdateBook;
+DROP PROCEDURE IF EXISTS AddBookCopy;
+DROP PROCEDURE IF EXISTS DeleteBook;
+DROP PROCEDURE IF EXISTS LowStockReport;
 
 DELIMITER $$
 
@@ -118,13 +124,16 @@ BEGIN
     SELECT v_OrderID AS NewOrderID;
 END $$
 
--- For procedure 3, case if borrowing an available book copy
+-- Procedure: a patron borrows a book. Picks the first available copy, enforces the loan rules
+-- (active account, no overdue loans, 5-loan limit, no second copy of the same book) and returns
+-- the new loan.
 CREATE PROCEDURE BorrowBook(
     IN p_UserID INT UNSIGNED,
-    IN p_CopyID INT UNSIGNED
+    IN p_BookID INT UNSIGNED
 )
 BEGIN
-    DECLARE v_Status VARCHAR(20);
+    DECLARE v_CopyID INT UNSIGNED DEFAULT NULL;
+    DECLARE v_LoanID INT UNSIGNED;
     DECLARE v_ActiveLoans INT DEFAULT 0;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -135,46 +144,127 @@ BEGIN
 
     START TRANSACTION;
 
-    IF NOT EXISTS (
-        SELECT 1 FROM Users
-        WHERE UserID = p_UserID AND AccountStatus = 'Active'
-    ) THEN
+    IF NOT EXISTS (SELECT 1 FROM Users WHERE UserID = p_UserID AND AccountStatus = 'Active') THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Active user not found';
     END IF;
 
+    IF NOT EXISTS (SELECT 1 FROM Books WHERE BookID = p_BookID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Book not found';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM Loans
+                WHERE UserID = p_UserID
+                  AND LoanStatus IN ('On-Loan', 'Late')
+                  AND DueDate < CURDATE()) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Return your overdue books before borrowing more';
+    END IF;
+
     SELECT COUNT(*) INTO v_ActiveLoans
-    FROM Loans
-    WHERE UserID = p_UserID AND LoanStatus IN ('On-Loan', 'Late');
+      FROM Loans
+     WHERE UserID = p_UserID AND LoanStatus IN ('On-Loan', 'Late');
 
     IF v_ActiveLoans >= 5 THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Borrowing limit reached';
+        SET MESSAGE_TEXT = 'The borrowing limit is five active loans';
     END IF;
 
-    SELECT CopyStatus INTO v_Status
-    FROM Book_Copies
-    WHERE CopyID = p_CopyID
-    FOR UPDATE;
-
-    IF v_Status IS NULL OR v_Status <> 'Available' THEN
+    IF EXISTS (SELECT 1
+                 FROM Loans l
+                 JOIN Book_Copies bc ON bc.CopyID = l.CopyID
+                WHERE l.UserID = p_UserID
+                  AND bc.BookID = p_BookID
+                  AND l.LoanStatus IN ('On-Loan', 'Late')) THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Book copy unavailable';
+        SET MESSAGE_TEXT = 'You already have a copy of this book on loan';
     END IF;
 
-    INSERT INTO Loans
-        (UserID, CopyID, BorrowedDate, DueDate, LoanStatus)
-    VALUES
-        (p_UserID, p_CopyID, CURDATE(),
-         DATE_ADD(CURDATE(), INTERVAL 14 DAY), 'On-Loan');
+    SELECT CopyID INTO v_CopyID
+      FROM Book_Copies
+     WHERE BookID = p_BookID AND CopyStatus = 'Available'
+     ORDER BY CopyID
+     LIMIT 1
+       FOR UPDATE;
 
-    UPDATE Book_Copies
-    SET CopyStatus = 'On-Loan'
-    WHERE CopyID = p_CopyID;
+    IF v_CopyID IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'No lendable copy is currently available';
+    END IF;
+
+    INSERT INTO Loans (UserID, CopyID, BorrowedDate, DueDate, LoanStatus)
+    VALUES (p_UserID, v_CopyID, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 14 DAY), 'On-Loan');
+
+    SET v_LoanID = LAST_INSERT_ID();
+
+    UPDATE Book_Copies SET CopyStatus = 'On-Loan' WHERE CopyID = v_CopyID;
 
     COMMIT;
 
-    SELECT 'Book borrowed successfully' AS Result;
+    SELECT v_LoanID AS NewLoanID, v_CopyID AS CopyID, DATE_ADD(CURDATE(), INTERVAL 14 DAY) AS DueDate;
+END $$
+
+-- Procedure: return a loan and charge the late fee ($0.25 per day late).
+-- p_UserID NULL means staff (any loan); otherwise the loan must belong to that patron.
+-- The copy is freed by the FreeCopyOnReturn trigger.
+CREATE PROCEDURE ReturnBook(
+    IN p_LoanID INT UNSIGNED,
+    IN p_UserID INT UNSIGNED
+)
+BEGIN
+    DECLARE v_Owner INT UNSIGNED;
+    DECLARE v_Status VARCHAR(20);
+    DECLARE v_Due DATE;
+    DECLARE v_DaysLate INT DEFAULT 0;
+    DECLARE v_Fee DECIMAL(8,2) DEFAULT 0;
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    SELECT UserID, LoanStatus, DueDate INTO v_Owner, v_Status, v_Due
+      FROM Loans
+     WHERE LoanID = p_LoanID
+       FOR UPDATE;
+
+    IF v_Owner IS NULL OR (p_UserID IS NOT NULL AND v_Owner <> p_UserID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Loan not found';
+    END IF;
+
+    IF v_Status = 'Returned' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'That loan has already been returned';
+    END IF;
+
+    SET v_DaysLate = GREATEST(DATEDIFF(CURDATE(), v_Due), 0);
+    SET v_Fee = v_DaysLate * 0.25;
+
+    UPDATE Loans
+       SET ReturnedDate = CURDATE(),
+           LoanStatus = 'Returned',
+           LateFee = v_Fee
+     WHERE LoanID = p_LoanID;
+
+    COMMIT;
+
+    SELECT p_LoanID AS LoanID, v_DaysLate AS DaysLate, v_Fee AS LateFee;
+END $$
+
+-- Procedure: flag loans that are past their due date as Late. Returns how many were flagged.
+CREATE PROCEDURE MarkOverdueLoans()
+BEGIN
+    UPDATE Loans
+       SET LoanStatus = 'Late'
+     WHERE LoanStatus = 'On-Loan'
+       AND DueDate < CURDATE();
+
+    SELECT ROW_COUNT() AS MarkedLate;
 END $$
 
 -- Procedure: staff adds a book. Validates the input, finds or creates the author, and inserts the
@@ -301,6 +391,191 @@ BEGIN
     COMMIT;
 
     SELECT p_BookID AS BookID, v_Current + p_Amount AS NewQuantity;
+END $$
+
+-- Procedure: staff edits a book. Same rules as AddBook; a blank author clears the author.
+CREATE PROCEDURE UpdateBook(
+    IN p_BookID INT UNSIGNED,
+    IN p_Title VARCHAR(255),
+    IN p_ISBN VARCHAR(13),
+    IN p_Description VARCHAR(1000),
+    IN p_Price DECIMAL(10,2),
+    IN p_Quantity SMALLINT UNSIGNED,
+    IN p_CategoryID INT UNSIGNED,
+    IN p_AuthorName VARCHAR(100)
+)
+BEGIN
+    DECLARE v_AuthorID INT UNSIGNED DEFAULT NULL;
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    SET p_Title = TRIM(COALESCE(p_Title, ''));
+    SET p_ISBN = NULLIF(TRIM(COALESCE(p_ISBN, '')), '');
+    SET p_Description = NULLIF(TRIM(COALESCE(p_Description, '')), '');
+    SET p_AuthorName = NULLIF(TRIM(COALESCE(p_AuthorName, '')), '');
+
+    START TRANSACTION;
+
+    IF NOT EXISTS (SELECT 1 FROM Books WHERE BookID = p_BookID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Book not found';
+    END IF;
+
+    IF p_Title = '' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Title is required';
+    END IF;
+
+    IF p_Price IS NULL OR p_Price < 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Price cannot be negative';
+    END IF;
+
+    IF p_ISBN IS NOT NULL AND p_ISBN NOT REGEXP '^([0-9]{10}|[0-9]{13})$' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'ISBN must contain exactly 10 or 13 digits';
+    END IF;
+
+    IF p_ISBN IS NOT NULL AND EXISTS (SELECT 1 FROM Books WHERE ISBN = p_ISBN AND BookID <> p_BookID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Another book already uses that ISBN';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM Category WHERE CategoryID = p_CategoryID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Choose a valid category';
+    END IF;
+
+    IF p_AuthorName IS NOT NULL THEN
+        SELECT AuthorID INTO v_AuthorID
+          FROM Author
+         WHERE LOWER(AuthorName) = LOWER(p_AuthorName)
+         LIMIT 1;
+
+        IF v_AuthorID IS NULL THEN
+            INSERT INTO Author (AuthorName) VALUES (p_AuthorName);
+            SET v_AuthorID = LAST_INSERT_ID();
+        END IF;
+    END IF;
+
+    UPDATE Books
+       SET Title = p_Title,
+           ISBN = p_ISBN,
+           Description = p_Description,
+           Price = p_Price,
+           Quantity = p_Quantity,
+           AuthorID = v_AuthorID,
+           CategoryID = p_CategoryID
+     WHERE BookID = p_BookID;
+
+    COMMIT;
+
+    SELECT p_BookID AS BookID;
+END $$
+
+-- Procedure: staff adds a lendable copy (barcode) of a book.
+CREATE PROCEDURE AddBookCopy(
+    IN p_BookID INT UNSIGNED,
+    IN p_Barcode VARCHAR(50)
+)
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    SET p_Barcode = TRIM(COALESCE(p_Barcode, ''));
+
+    START TRANSACTION;
+
+    IF NOT EXISTS (SELECT 1 FROM Books WHERE BookID = p_BookID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Book not found';
+    END IF;
+
+    IF p_Barcode = '' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Barcode is required';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM Book_Copies WHERE Barcode = p_Barcode) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'That barcode is already in use';
+    END IF;
+
+    INSERT INTO Book_Copies (Barcode, BookID) VALUES (p_Barcode, p_BookID);
+
+    COMMIT;
+
+    SELECT LAST_INSERT_ID() AS NewCopyID;
+END $$
+
+-- Procedure: staff deletes a book that has no copies and has never been ordered.
+CREATE PROCEDURE DeleteBook(
+    IN p_BookID INT UNSIGNED
+)
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    IF NOT EXISTS (SELECT 1 FROM Books WHERE BookID = p_BookID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Book not found';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM Order_Items WHERE BookID = p_BookID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'This book appears in past orders and cannot be deleted';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM Book_Copies WHERE BookID = p_BookID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'This book has lendable copies and cannot be deleted';
+    END IF;
+
+    DELETE FROM Books WHERE BookID = p_BookID;
+
+    COMMIT;
+
+    SELECT p_BookID AS DeletedBookID;
+END $$
+
+-- Procedure: books at or below a stock threshold (books with no quantity set are included),
+-- optionally filtered by title, author or ISBN. Lowest stock first.
+CREATE PROCEDURE LowStockReport(
+    IN p_Threshold INT,
+    IN p_Search VARCHAR(100)
+)
+BEGIN
+    DECLARE v_Pattern VARCHAR(220);
+
+    IF p_Threshold IS NULL OR p_Threshold < 0 THEN
+        SET p_Threshold = 3;
+    END IF;
+
+    SET p_Search = TRIM(REGEXP_REPLACE(COALESCE(p_Search, ''), '[[:space:]]+', ' '));
+    SET v_Pattern = CONCAT('%', REPLACE(p_Search, ' ', '%'), '%');
+
+    SELECT b.BookID, b.Title, b.ISBN, b.Quantity, a.AuthorName, c.CategoryName
+      FROM Books b
+      LEFT JOIN Author a ON a.AuthorID = b.AuthorID
+      LEFT JOIN Category c ON c.CategoryID = b.CategoryID
+     WHERE (b.Quantity IS NULL OR b.Quantity <= p_Threshold)
+       AND (p_Search = ''
+            OR b.Title LIKE v_Pattern
+            OR a.AuthorName LIKE v_Pattern
+            OR b.ISBN LIKE v_Pattern)
+     ORDER BY b.Quantity IS NULL, b.Quantity, b.Title;
 END $$
 
 DELIMITER ;

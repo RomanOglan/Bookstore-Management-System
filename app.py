@@ -107,18 +107,28 @@ def book_form_values(form):
     if isbn and (not isbn.isdigit() or len(isbn) not in {10, 13}):
         raise ValueError("ISBN must contain exactly 10 or 13 digits.")
     try:
-        price = Decimal(form.get("price", ""))
+        price = Decimal(form.get("price", "").strip())
     except InvalidOperation:
-        raise ValueError("Price must be a number.")
-    if not price.is_finite() or price < 0:
+        raise ValueError("Price must be a number, for example 12.99.")
+    if not price.is_finite():
+        raise ValueError("Price must be a number, for example 12.99.")
+    if price < 0:
         raise ValueError("Price cannot be negative.")
+    if price >= 100000000:
+        raise ValueError("Price is too large.")
     quantity_text = form.get("quantity", "").strip()
-    quantity = None if not quantity_text else int(quantity_text)
+    try:
+        quantity = None if not quantity_text else int(quantity_text)
+    except ValueError:
+        raise ValueError("Quantity must be a whole number.")
     if quantity is not None and quantity < 0:
         raise ValueError("Quantity cannot be negative.")
     if quantity is not None and quantity > 65535:
         raise ValueError("Quantity cannot exceed 65535.")
-    category_id = int(form.get("category_id", ""))
+    try:
+        category_id = int(form.get("category_id", ""))
+    except ValueError:
+        raise ValueError("Choose a category.")
     return title, isbn, description, price, quantity, category_id
 
 
@@ -273,32 +283,13 @@ def order_error_message(message, book_id, quantity):
 @login_required
 def borrow_book(book_id):
     require_csrf()
-    conn = get_connection()
     try:
-        cur = conn.cursor(dictionary=True)
-        conn.start_transaction()
-        cur.execute("SELECT COUNT(*) AS count FROM Loans WHERE UserID=%s AND LoanStatus IN ('On-Loan','Late')", (session["user_id"],))
-        if cur.fetchone()["count"] >= 5:
-            raise ValueError("The borrowing limit is five active loans.")
-        cur.execute("SELECT CopyID FROM Book_Copies WHERE BookID=%s AND CopyStatus='Available' ORDER BY CopyID LIMIT 1 FOR UPDATE", (book_id,))
-        copy = cur.fetchone()
-        if not copy:
-            raise ValueError("No lendable copy is currently available.")
-        cur.execute("""INSERT INTO Loans (UserID, CopyID, BorrowedDate, DueDate, LoanStatus)
-                       VALUES (%s,%s,CURDATE(),DATE_ADD(CURDATE(), INTERVAL 14 DAY),'On-Loan')""",
-                    (session["user_id"], copy["CopyID"]))
-        cur.execute("UPDATE Book_Copies SET CopyStatus='On-Loan' WHERE CopyID=%s", (copy["CopyID"],))
-        conn.commit()
+        call_procedure("BorrowBook", (session["user_id"], book_id))
         flash("Book borrowed for 14 days.", "success")
-    except ValueError as exc:
-        conn.rollback()
-        flash(str(exc), "error")
-    except Error:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-        conn.close()
+    except Error as exc:
+        if exc.errno != 1644:
+            raise
+        flash(exc.msg, "error")
     return redirect(url_for("book_detail", book_id=book_id))
 
 
@@ -334,23 +325,69 @@ def order_detail(order_id):
     return render_template("order_detail.html", order=order, items=items, total=total)
 
 
+LOAN_SELECT = """SELECT l.LoanID, u.Name, b.Title, bc.Barcode, l.BorrowedDate, l.DueDate,
+                        l.ReturnedDate, l.LoanStatus,
+                        CASE WHEN l.LoanStatus = 'Returned' THEN l.LateFee
+                             WHEN l.DueDate < CURDATE() THEN DATEDIFF(CURDATE(), l.DueDate) * %s
+                             ELSE 0 END AS Fee
+                   FROM Loans l
+                   JOIN Users u ON l.UserID = u.UserID
+                   JOIN Book_Copies bc ON l.CopyID = bc.CopyID
+                   JOIN Books b ON bc.BookID = b.BookID"""
+LATE_FEE_PER_DAY = Decimal("0.25")
+
+
 @app.route("/loans")
 @login_required
 def loans():
-    rows = query_all(
-        """SELECT l.LoanID, b.Title, bc.Barcode, l.BorrowedDate, l.DueDate,
-                  l.ReturnedDate, l.LoanStatus
-             FROM Loans l JOIN Book_Copies bc ON l.CopyID=bc.CopyID
-             JOIN Books b ON bc.BookID=b.BookID WHERE l.UserID=%s ORDER BY l.DueDate DESC""",
-        (session["user_id"],))
-    return render_template("loans.html", loans=rows)
+    call_procedure("MarkOverdueLoans", ())
+    rows = query_all(LOAN_SELECT + " WHERE l.UserID=%s ORDER BY l.LoanStatus = 'Returned', l.DueDate DESC",
+                     (LATE_FEE_PER_DAY, session["user_id"]))
+    owed = sum((row["Fee"] for row in rows), Decimal("0"))
+    return render_template("loans.html", loans=rows, owed=owed)
+
+
+@app.post("/loan/<int:loan_id>/return")
+@login_required
+def return_own_loan(loan_id):
+    require_csrf()
+    flash_return(call_procedure_or_flash("ReturnBook", (loan_id, session["user_id"])))
+    return redirect(url_for("loans"))
+
+
+def call_procedure_or_flash(name, args):
+    try:
+        return call_procedure(name, args)
+    except Error as exc:
+        if exc.errno != 1644:
+            raise
+        flash(exc.msg, "error")
+        return None
+
+
+def flash_return(results):
+    if results:
+        row = results[0][0]
+        if row["DaysLate"]:
+            flash(f"Book returned {row['DaysLate']} day(s) late. Late fee: ${row['LateFee']}.", "success")
+        else:
+            flash("Book returned on time.", "success")
 
 
 @app.route("/admin/books")
 @staff_required
 def admin_books():
-    books = query_all("SELECT BookID, ISBN, Title, Price, Quantity FROM Books ORDER BY Title LIMIT 200")
-    return render_template("admin_books.html", books=books)
+    search = " ".join(request.args.get("q", "").split())[:100]
+    category = request.args.get("category", type=int)
+    page = max(request.args.get("page", 1, type=int), 1)
+    per_page = 50
+    results = call_procedure("SearchBooks", (search, category, per_page, (page - 1) * per_page))
+    count = results[0][0]["total"]
+    books = results[1] if len(results) > 1 else []
+    categories = query_all("SELECT CategoryID, CategoryName FROM Category ORDER BY CategoryName")
+    return render_template("admin_books.html", books=books, categories=categories, total=count,
+                           page=page, pages=max((count + per_page - 1) // per_page, 1),
+                           search=search, selected_category=category)
 
 
 @app.route("/admin/book/new", methods=["GET", "POST"])
@@ -377,7 +414,9 @@ def add_book():
 @app.route("/admin/book/<int:book_id>/edit", methods=["GET", "POST"])
 @staff_required
 def edit_book(book_id):
-    book = query_one("SELECT * FROM Books WHERE BookID=%s", (book_id,))
+    book = query_one(
+        """SELECT b.*, a.AuthorName FROM Books b
+             LEFT JOIN Author a ON a.AuthorID = b.AuthorID WHERE b.BookID=%s""", (book_id,))
     if not book:
         abort(404)
     categories = query_all("SELECT CategoryID, CategoryName FROM Category ORDER BY CategoryName")
@@ -385,18 +424,16 @@ def edit_book(book_id):
         require_csrf()
         try:
             values = book_form_values(request.form)
-            conn = get_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute("""UPDATE Books SET Title=%s, ISBN=%s, Description=%s, Price=%s,
-                               Quantity=%s, CategoryID=%s WHERE BookID=%s""", (*values, book_id))
-                conn.commit(); cur.close()
-            finally:
-                conn.close()
+            author = request.form.get("author", "").strip()[:100] or None
+            call_procedure("UpdateBook", (book_id, *values, author))
             flash("Book updated.", "success")
             return redirect(url_for("book_detail", book_id=book_id))
         except (ValueError, TypeError) as exc:
             flash(str(exc), "error")
+        except Error as exc:
+            if exc.errno != 1644:
+                raise
+            flash(exc.msg, "error")
     return render_template("book_form.html", book=book, categories=categories)
 
 
@@ -404,21 +441,26 @@ def edit_book(book_id):
 @staff_required
 def delete_book(book_id):
     require_csrf()
-    conn = get_connection()
     try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM Books WHERE BookID=%s", (book_id,))
-        conn.commit()
+        call_procedure("DeleteBook", (book_id,))
         flash("Book deleted.", "success")
     except Error as exc:
-        conn.rollback()
-        if exc.errno == 1451:
-            flash("This book has order, loan, or copy history and cannot be deleted.", "error")
-        else:
+        if exc.errno != 1644:
             raise
-    finally:
-        cur.close(); conn.close()
+        flash(exc.msg, "error")
+        return redirect(url_for("edit_book", book_id=book_id))
     return redirect(url_for("admin_books"))
+
+
+@app.route("/admin/low-stock")
+@staff_required
+def low_stock():
+    threshold = request.args.get("threshold", 3, type=int)
+    threshold = min(max(threshold, 0), 1000)
+    search = " ".join(request.args.get("q", "").split())[:100]
+    results = call_procedure("LowStockReport", (threshold, search))
+    books = results[0] if results else []
+    return render_template("low_stock.html", books=books, threshold=threshold, search=search)
 
 
 @app.post("/admin/book/<int:book_id>/restock")
@@ -443,17 +485,16 @@ def restock_book(book_id):
 def add_copy(book_id):
     require_csrf()
     barcode = request.form.get("barcode", "").strip()
-    if not barcode or len(barcode) > 50:
-        flash("Enter a barcode up to 50 characters.", "error")
+    if len(barcode) > 50:
+        flash("Barcode can be at most 50 characters.", "error")
     else:
-        conn = get_connection()
         try:
-            cur = conn.cursor()
-            cur.execute("INSERT INTO Book_Copies (Barcode, BookID) VALUES (%s,%s)", (barcode, book_id))
-            conn.commit(); cur.close()
+            call_procedure("AddBookCopy", (book_id, barcode))
             flash("Lendable copy added.", "success")
-        finally:
-            conn.close()
+        except Error as exc:
+            if exc.errno != 1644:
+                raise
+            flash(exc.msg, "error")
     return redirect(url_for("book_detail", book_id=book_id))
 
 
@@ -471,34 +512,31 @@ def admin_orders():
     return render_template("admin_orders.html", orders=rows)
 
 
+LOAN_FILTERS = {
+    "active": "l.LoanStatus IN ('On-Loan', 'Late')",
+    "late": "l.LoanStatus = 'Late'",
+    "returned": "l.LoanStatus = 'Returned'",
+    "all": "1 = 1",
+}
+
+
 @app.route("/admin/loans")
 @staff_required
 def admin_loans():
-    rows = query_all(
-        """SELECT l.LoanID, u.Name, b.Title, bc.Barcode, l.DueDate, l.LoanStatus
-             FROM Loans l JOIN Users u ON l.UserID=u.UserID JOIN Book_Copies bc ON l.CopyID=bc.CopyID
-             JOIN Books b ON bc.BookID=b.BookID WHERE l.LoanStatus IN ('On-Loan','Late') ORDER BY l.DueDate""")
-    return render_template("admin_loans.html", loans=rows)
+    status = request.args.get("status", "active")
+    if status not in LOAN_FILTERS:
+        status = "active"
+    call_procedure("MarkOverdueLoans", ())
+    rows = query_all(LOAN_SELECT + " WHERE " + LOAN_FILTERS[status] + " ORDER BY l.DueDate LIMIT 200",
+                     (LATE_FEE_PER_DAY,))
+    return render_template("admin_loans.html", loans=rows, status=status)
 
 
 @app.post("/admin/loan/<int:loan_id>/return")
 @staff_required
 def return_loan(loan_id):
     require_csrf()
-    conn = get_connection()
-    try:
-        cur = conn.cursor(dictionary=True); conn.start_transaction()
-        cur.execute("SELECT CopyID, LoanStatus FROM Loans WHERE LoanID=%s FOR UPDATE", (loan_id,))
-        loan = cur.fetchone()
-        if not loan or loan["LoanStatus"] == "Returned":
-            raise ValueError("That loan is not active.")
-        cur.execute("UPDATE Loans SET ReturnedDate=CURDATE(), LoanStatus='Returned' WHERE LoanID=%s", (loan_id,))
-        cur.execute("UPDATE Book_Copies SET CopyStatus='Available' WHERE CopyID=%s", (loan["CopyID"],))
-        conn.commit(); flash("Book returned.", "success")
-    except ValueError as exc:
-        conn.rollback(); flash(str(exc), "error")
-    finally:
-        cur.close(); conn.close()
+    flash_return(call_procedure_or_flash("ReturnBook", (loan_id, None)))
     return redirect(url_for("admin_loans"))
 
 
