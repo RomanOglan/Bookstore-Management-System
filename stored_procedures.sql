@@ -3,19 +3,52 @@ USE Bookstore;
 DROP PROCEDURE IF EXISTS SearchBooks;
 DROP PROCEDURE IF EXISTS PlaceOrder;
 DROP PROCEDURE IF EXISTS BorrowBook;
+DROP PROCEDURE IF EXISTS AddBook;
+DROP PROCEDURE IF EXISTS RestockBook;
 
 DELIMITER $$
 
--- first procedure, in a case of searching for books
-CREATE PROCEDURE SearchBooks(IN searchText VARCHAR(100))
+-- Procedure 1: catalog search by title, author, or ISBN, with an optional category filter and paging.
+-- Ignores case and extra spaces. Words match in order, so "harry stone" finds "Harry Potter and the Stone".
+-- Returns two result sets: first the total match count, then the requested page of books.
+CREATE PROCEDURE SearchBooks(
+    IN p_Search VARCHAR(100),
+    IN p_CategoryID INT UNSIGNED,
+    IN p_Limit INT,
+    IN p_Offset INT
+)
 BEGIN
-    SELECT b.BookID, b.ISBN, b.Title,
-           a.AuthorName, b.Price, b.Quantity
-    FROM Books b
-    LEFT JOIN Author a ON b.AuthorID = a.AuthorID
-    WHERE LOWER(b.Title) LIKE CONCAT('%', LOWER(TRIM(searchText)), '%')
-       OR LOWER(COALESCE(a.AuthorName, '')) LIKE CONCAT('%', LOWER(TRIM(searchText)), '%')
-       OR b.ISBN LIKE CONCAT('%', TRIM(searchText), '%');
+    DECLARE v_Term VARCHAR(100);
+    DECLARE v_Pattern VARCHAR(120);
+    DECLARE v_IsbnPart VARCHAR(100);
+
+    SET v_Term = LOWER(TRIM(REGEXP_REPLACE(COALESCE(p_Search, ''), '[[:space:]]+', ' ')));
+    SET v_Pattern = CONCAT('%', REPLACE(v_Term, ' ', '%'), '%');
+    SET v_IsbnPart = REPLACE(REPLACE(v_Term, ' ', ''), '-', '');
+    SET p_Limit = COALESCE(p_Limit, 24);
+    SET p_Offset = COALESCE(p_Offset, 0);
+
+    SELECT COUNT(*) AS total
+      FROM Books b
+      LEFT JOIN Author a ON b.AuthorID = a.AuthorID
+     WHERE (v_Term = ''
+            OR LOWER(b.Title) LIKE v_Pattern
+            OR LOWER(COALESCE(a.AuthorName, '')) LIKE v_Pattern
+            OR (v_IsbnPart <> '' AND b.ISBN LIKE CONCAT('%', v_IsbnPart, '%')))
+       AND (p_CategoryID IS NULL OR b.CategoryID = p_CategoryID);
+
+    SELECT b.BookID, b.ISBN, b.Title, b.Price, b.Quantity, b.CatalogStatus, b.Rating,
+           a.AuthorName, c.CategoryName
+      FROM Books b
+      LEFT JOIN Author a ON b.AuthorID = a.AuthorID
+      LEFT JOIN Category c ON b.CategoryID = c.CategoryID
+     WHERE (v_Term = ''
+            OR LOWER(b.Title) LIKE v_Pattern
+            OR LOWER(COALESCE(a.AuthorName, '')) LIKE v_Pattern
+            OR (v_IsbnPart <> '' AND b.ISBN LIKE CONCAT('%', v_IsbnPart, '%')))
+       AND (p_CategoryID IS NULL OR b.CategoryID = p_CategoryID)
+     ORDER BY b.Title
+     LIMIT p_Limit OFFSET p_Offset;
 END $$
 
 -- for procedure 2, case in placing an order and update inventory
@@ -142,6 +175,132 @@ BEGIN
     COMMIT;
 
     SELECT 'Book borrowed successfully' AS Result;
+END $$
+
+-- Procedure: staff adds a book. Validates the input, finds or creates the author, and inserts the
+-- book in one transaction. Returns NewBookID.
+CREATE PROCEDURE AddBook(
+    IN p_Title VARCHAR(255),
+    IN p_ISBN VARCHAR(13),
+    IN p_Description VARCHAR(1000),
+    IN p_Price DECIMAL(10,2),
+    IN p_Quantity SMALLINT UNSIGNED,
+    IN p_CategoryID INT UNSIGNED,
+    IN p_AuthorName VARCHAR(100)
+)
+BEGIN
+    DECLARE v_AuthorID INT UNSIGNED DEFAULT NULL;
+    DECLARE v_BookID INT UNSIGNED;
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    SET p_Title = TRIM(COALESCE(p_Title, ''));
+    SET p_ISBN = NULLIF(TRIM(COALESCE(p_ISBN, '')), '');
+    SET p_Description = NULLIF(TRIM(COALESCE(p_Description, '')), '');
+    SET p_AuthorName = NULLIF(TRIM(COALESCE(p_AuthorName, '')), '');
+
+    START TRANSACTION;
+
+    IF p_Title = '' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Title is required';
+    END IF;
+
+    IF p_Price IS NULL OR p_Price < 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Price cannot be negative';
+    END IF;
+
+    IF p_ISBN IS NOT NULL AND p_ISBN NOT REGEXP '^([0-9]{10}|[0-9]{13})$' THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'ISBN must contain exactly 10 or 13 digits';
+    END IF;
+
+    IF p_ISBN IS NOT NULL AND EXISTS (SELECT 1 FROM Books WHERE ISBN = p_ISBN) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'A book with that ISBN already exists';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM Category WHERE CategoryID = p_CategoryID) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Choose a valid category';
+    END IF;
+
+    IF p_AuthorName IS NOT NULL THEN
+        SELECT AuthorID INTO v_AuthorID
+          FROM Author
+         WHERE LOWER(AuthorName) = LOWER(p_AuthorName)
+         LIMIT 1;
+
+        IF v_AuthorID IS NULL THEN
+            INSERT INTO Author (AuthorName) VALUES (p_AuthorName);
+            SET v_AuthorID = LAST_INSERT_ID();
+        END IF;
+    END IF;
+
+    INSERT INTO Books (Title, ISBN, Description, Price, Quantity, AuthorID, CategoryID)
+    VALUES (p_Title, p_ISBN, p_Description, p_Price, p_Quantity, v_AuthorID, p_CategoryID);
+
+    SET v_BookID = LAST_INSERT_ID();
+
+    COMMIT;
+
+    SELECT v_BookID AS NewBookID;
+END $$
+
+-- Procedure: staff adds stock to a book (a book with no quantity set counts as 0).
+-- Returns the new quantity.
+CREATE PROCEDURE RestockBook(
+    IN p_BookID INT UNSIGNED,
+    IN p_Amount INT
+)
+BEGIN
+    DECLARE v_Exists INT DEFAULT 0;
+    DECLARE v_Current INT DEFAULT 0;
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    IF p_Amount IS NULL OR p_Amount < 1 OR p_Amount > 10000 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Restock amount must be between 1 and 10000';
+    END IF;
+
+    SELECT COUNT(*) INTO v_Exists
+      FROM Books
+     WHERE BookID = p_BookID
+       FOR UPDATE;
+
+    IF v_Exists = 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Book not found';
+    END IF;
+
+    SELECT COALESCE(Quantity, 0) INTO v_Current
+      FROM Books
+     WHERE BookID = p_BookID;
+
+    IF v_Current + p_Amount > 65535 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Stock cannot exceed 65535 copies';
+    END IF;
+
+    UPDATE Books
+       SET Quantity = v_Current + p_Amount
+     WHERE BookID = p_BookID;
+
+    COMMIT;
+
+    SELECT p_BookID AS BookID, v_Current + p_Amount AS NewQuantity;
 END $$
 
 DELIMITER ;

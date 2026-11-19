@@ -29,6 +29,20 @@ def query_one(sql, params=()):
     return rows[0] if rows else None
 
 
+def call_procedure(name, args=()):
+    """Call a stored procedure and return its result sets as a list of lists of dicts."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.callproc(name, args)
+        results = [result.fetchall() for result in cur.stored_results()]
+        conn.commit()
+        cur.close()
+        return results
+    finally:
+        conn.close()
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -89,6 +103,8 @@ def book_form_values(form):
     quantity = None if not quantity_text else int(quantity_text)
     if quantity is not None and quantity < 0:
         raise ValueError("Quantity cannot be negative.")
+    if quantity is not None and quantity > 65535:
+        raise ValueError("Quantity cannot exceed 65535.")
     category_id = int(form.get("category_id", ""))
     return title, isbn, description, price, quantity, category_id
 
@@ -110,27 +126,9 @@ def home():
     category = request.args.get("category", type=int)
     page = max(request.args.get("page", 1, type=int), 1)
     per_page = 24
-    where, params = [], []
-    if search:
-        term = f"%{search.lower()}%"
-        where.append("(LOWER(b.Title) LIKE %s OR LOWER(COALESCE(a.AuthorName,'')) LIKE %s OR b.ISBN LIKE %s)")
-        params.extend([term, term, f"%{search}%"])
-    if category:
-        where.append("b.CategoryID=%s")
-        params.append(category)
-    clause = " WHERE " + " AND ".join(where) if where else ""
-    count = query_one(
-        "SELECT COUNT(*) AS total FROM Books b LEFT JOIN Author a ON b.AuthorID=a.AuthorID" + clause,
-        params,
-    )["total"]
-    books = query_all(
-        """SELECT b.BookID, b.Title, b.Price, b.Quantity, b.CatalogStatus, b.Rating,
-                  a.AuthorName, c.CategoryName
-             FROM Books b LEFT JOIN Author a ON b.AuthorID=a.AuthorID
-             LEFT JOIN Category c ON b.CategoryID=c.CategoryID""" + clause +
-        " ORDER BY b.Title LIMIT %s OFFSET %s",
-        [*params, per_page, (page - 1) * per_page],
-    )
+    results = call_procedure("SearchBooks", (search, category, per_page, (page - 1) * per_page))
+    count = results[0][0]["total"]
+    books = results[1] if len(results) > 1 else []
     categories = query_all("SELECT CategoryID, CategoryName FROM Category ORDER BY CategoryName")
     return render_template("home.html", books=books, categories=categories, total=count,
                            page=page, pages=max((count + per_page - 1) // per_page, 1),
@@ -290,20 +288,16 @@ def add_book():
         require_csrf()
         try:
             values = book_form_values(request.form)
-            conn = get_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute("""INSERT INTO Books (Title, ISBN, Description, Price, Quantity, CategoryID)
-                               VALUES (%s,%s,%s,%s,%s,%s)""", values)
-                conn.commit()
-                book_id = cur.lastrowid
-                cur.close()
-            finally:
-                conn.close()
+            author = request.form.get("author", "").strip()[:100] or None
+            book_id = call_procedure("AddBook", (*values, author))[0][0]["NewBookID"]
             flash("Book created.", "success")
             return redirect(url_for("book_detail", book_id=book_id))
         except (ValueError, TypeError) as exc:
             flash(str(exc), "error")
+        except Error as exc:
+            if exc.errno != 1644:
+                raise
+            flash(exc.msg, "error")
     return render_template("book_form.html", book=None, categories=categories)
 
 
@@ -351,6 +345,23 @@ def delete_book(book_id):
             raise
     finally:
         cur.close(); conn.close()
+    return redirect(url_for("admin_books"))
+
+
+@app.post("/admin/book/<int:book_id>/restock")
+@staff_required
+def restock_book(book_id):
+    require_csrf()
+    try:
+        amount = positive_int(request.form.get("amount"), "Restock amount")
+        result = call_procedure("RestockBook", (book_id, amount))[0][0]
+        flash(f"Stock updated. New quantity: {result['NewQuantity']}.", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Error as exc:
+        if exc.errno != 1644:
+            raise
+        flash(exc.msg, "error")
     return redirect(url_for("admin_books"))
 
 
