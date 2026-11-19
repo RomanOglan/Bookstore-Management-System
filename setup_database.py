@@ -134,6 +134,18 @@ def import_catalog(conn):
     return len(rows)
 
 
+def apply_demo_stock(conn):
+    """Give catalog books that have no quantity a demo stock level (3-17 copies).
+    Only touches rows where Quantity IS NULL, so staff edits are never overwritten.
+    The CSV has no stock numbers, so these are made-up test values."""
+    cur = conn.cursor()
+    cur.execute("UPDATE Books SET Quantity = 3 + (BookID % 15) WHERE Quantity IS NULL")
+    updated = cur.rowcount
+    conn.commit()
+    cur.close()
+    return updated
+
+
 def ensure_demo_users(conn):
     """Create local demo logins only when those emails do not already exist."""
     cur = conn.cursor()
@@ -165,11 +177,13 @@ def main():
     try:
         apply_safe_migrations(conn)
         imported = import_catalog(conn)
+        stocked = apply_demo_stock(conn)
         ensure_demo_users(conn)
         install_database_logic(conn)
     finally:
         conn.close()
     print(f"Database ready. Verified CSV catalog rows: {imported}.")
+    print(f"Demo stock added to {stocked} books that had no quantity.")
     print("Existing orders, loans, quantities, and non-CSV books were preserved." if not args.reset else "Bookstore was intentionally rebuilt.")
 
 
