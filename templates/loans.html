@@ -5,6 +5,9 @@
 {% block content %}
   <h1>My loans</h1>
   {% if loans %}
+    {% if owed > 0 %}
+      <p><strong>Late fees: ${{ '%.2f'|format(owed) }}</strong> ($0.25 per day late)</p>
+    {% endif %}
     <table>
       <thead>
         <tr>
@@ -12,7 +15,10 @@
           <th>Barcode</th>
           <th>Borrowed</th>
           <th>Due</th>
+          <th>Returned</th>
           <th>Status</th>
+          <th>Late fee</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -22,7 +28,17 @@
             <td>{{ loan.Barcode }}</td>
             <td>{{ loan.BorrowedDate }}</td>
             <td>{{ loan.DueDate }}</td>
+            <td>{{ loan.ReturnedDate or '—' }}</td>
             <td>{{ loan.LoanStatus }}</td>
+            <td>{{ '$%.2f'|format(loan.Fee) if loan.Fee > 0 else '—' }}</td>
+            <td>
+              {% if loan.LoanStatus != 'Returned' %}
+                <form method="post" action="{{ url_for('return_own_loan', loan_id=loan.LoanID) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button>Return</button>
+                </form>
+              {% endif %}
+            </td>
           </tr>
         {% endfor %}
       </tbody>

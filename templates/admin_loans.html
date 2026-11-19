@@ -3,7 +3,16 @@
   Manage loans
 {% endblock %}
 {% block content %}
-  <h1>Active loans</h1>
+  <h1>Loans</h1>
+  <nav class="filters" aria-label="Loan filter">
+    {% for key, label in [('active', 'Active'), ('late', 'Overdue'), ('returned', 'Returned'), ('all', 'All')] %}
+      {% if key == status %}
+        <strong>{{ label }}</strong>
+      {% else %}
+        <a href="{{ url_for('admin_loans', status=key) }}">{{ label }}</a>
+      {% endif %}
+    {% endfor %}
+  </nav>
   {% if loans %}
     <table>
       <thead>
@@ -11,7 +20,11 @@
           <th>Patron</th>
           <th>Book</th>
           <th>Barcode</th>
+          <th>Borrowed</th>
           <th>Due</th>
+          <th>Returned</th>
+          <th>Status</th>
+          <th>Late fee</th>
           <th></th>
         </tr>
       </thead>
@@ -21,18 +34,24 @@
             <td>{{ loan.Name }}</td>
             <td>{{ loan.Title }}</td>
             <td>{{ loan.Barcode }}</td>
+            <td>{{ loan.BorrowedDate }}</td>
             <td>{{ loan.DueDate }}</td>
+            <td>{{ loan.ReturnedDate or '—' }}</td>
+            <td>{% if loan.LoanStatus == 'Late' %}<strong>Late</strong>{% else %}{{ loan.LoanStatus }}{% endif %}</td>
+            <td>{{ '$%.2f'|format(loan.Fee) if loan.Fee > 0 else '—' }}</td>
             <td>
-              <form method="post" action="{{ url_for('return_loan', loan_id=loan.LoanID) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button>Return</button>
-              </form>
+              {% if loan.LoanStatus != 'Returned' %}
+                <form method="post" action="{{ url_for('return_loan', loan_id=loan.LoanID) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button>Return</button>
+                </form>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   {% else %}
-    <div class="empty">No active loans.</div>
+    <div class="empty">No loans match.</div>
   {% endif %}
 {% endblock %}

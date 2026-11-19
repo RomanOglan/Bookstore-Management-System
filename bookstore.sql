@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS Loans (
     DueDate      DATE NOT NULL,
     ReturnedDate DATE,
     LoanStatus   ENUM('On-Loan', 'Returned', 'Late') NOT NULL DEFAULT 'On-Loan',
+    LateFee      DECIMAL(8,2) NOT NULL DEFAULT 0,
     CONSTRAINT fk_loans_user FOREIGN KEY (UserID) REFERENCES Users (UserID),
     CONSTRAINT fk_loans_copy FOREIGN KEY (CopyID) REFERENCES Book_Copies (CopyID),
     INDEX idx_loans_due (DueDate, ReturnedDate)
