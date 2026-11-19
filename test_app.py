@@ -95,6 +95,67 @@ class ValidationTests(unittest.TestCase):
                 session.update(user_id=1, role=role, name="Tester")
         return client
 
+    def test_friendly_number_errors(self):
+        base = {"title": "A Book", "price": "9.99", "quantity": "3", "category_id": "1"}
+        for field, bad, text in (("price", "abc", "Price must be a number"),
+                                 ("quantity", "x", "Quantity must be a whole number"),
+                                 ("category_id", "", "Choose a category")):
+            with self.assertRaises(ValueError) as ctx:
+                app.book_form_values(MultiDict({**base, field: bad}))
+            self.assertIn(text, str(ctx.exception))
+
+    def test_edit_book_calls_update_procedure_and_shows_error(self):
+        client = self.staff_client()
+        book = {"BookID": 5, "Title": "Old", "ISBN": None, "Description": None, "Price": Decimal("5"),
+                "Quantity": 1, "CategoryID": 1, "AuthorName": None}
+        form = {"title": "New", "isbn": "1234567890", "price": "9.99", "quantity": "3",
+                "category_id": "1", "author": "Some Author", "csrf_token": "tok"}
+        with patch.object(app, "query_one", return_value=book), \
+             patch.object(app, "query_all", return_value=[{"CategoryID": 1, "CategoryName": "Fiction"}]):
+            with patch.object(app, "call_procedure", return_value=[[{"BookID": 5}]]) as proc:
+                response = client.post("/admin/book/5/edit", data=form)
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(proc.call_args.args[0], "UpdateBook")
+            self.assertEqual(proc.call_args.args[1][0], 5)
+            self.assertEqual(proc.call_args.args[1][-1], "Some Author")
+            error = app.Error(msg="Another book already uses that ISBN", errno=1644)
+            with patch.object(app, "call_procedure", side_effect=error):
+                response = client.post("/admin/book/5/edit", data=form)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Another book already uses that ISBN", response.data)
+
+    def test_add_copy_duplicate_barcode_message(self):
+        client = self.staff_client()
+        error = app.Error(msg="That barcode is already in use", errno=1644)
+        with patch.object(app, "call_procedure", side_effect=error) as proc:
+            response = client.post("/admin/book/5/copy", data={"barcode": "BC-1", "csrf_token": "tok"},
+                                   follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("AddBookCopy", (5, "BC-1")))
+        with client.session_transaction() as session:
+            self.assertIn("That barcode is already in use", [m for _, m in session["_flashes"]])
+
+    def test_delete_book_uses_procedure_and_reports_block(self):
+        client = self.staff_client()
+        with patch.object(app, "call_procedure", return_value=[[{"DeletedBookID": 5}]]) as proc:
+            response = client.post("/admin/book/5/delete", data={"csrf_token": "tok"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("DeleteBook", (5,)))
+        error = app.Error(msg="This book appears in past orders and cannot be deleted", errno=1644)
+        with patch.object(app, "call_procedure", side_effect=error):
+            response = client.post("/admin/book/5/delete", data={"csrf_token": "tok"})
+        self.assertIn("/admin/book/5/edit", response.headers["Location"])
+
+    def test_low_stock_page_staff_only_and_calls_procedure(self):
+        self.assertEqual(self.client_as("Customer").get("/admin/low-stock").status_code, 403)
+        client = self.staff_client()
+        rows = [{"BookID": 1, "Title": "Tiny Stock", "Quantity": 1, "AuthorName": None, "CategoryName": "Fiction"}]
+        with patch.object(app, "call_procedure", return_value=[rows]) as proc:
+            response = client.get("/admin/low-stock?threshold=5&q=%20tiny%20%20stock%20")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(proc.call_args.args, ("LowStockReport", (5, "tiny stock")))
+        self.assertIn(b"Tiny Stock", response.data)
+
     def test_dbtest_is_staff_only(self):
         self.assertEqual(self.client_as(None).get("/dbtest").status_code, 302)
         self.assertEqual(self.client_as("Customer").get("/dbtest").status_code, 403)
