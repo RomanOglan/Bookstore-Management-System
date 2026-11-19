@@ -108,7 +108,7 @@ BEGIN
     END IF;
 
     INSERT INTO Orders (OrderDate, DeliveryType, UserID)
-    VALUES (CURDATE(), p_DeliveryType, p_UserID);
+    VALUES (NOW(), p_DeliveryType, p_UserID);
 
     SET v_OrderID = LAST_INSERT_ID();
 

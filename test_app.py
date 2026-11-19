@@ -282,6 +282,89 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"already registered", response.data)
 
+    # ---- Orders ----
+    ORDER = {"OrderID": 7, "OrderDate": "2026-11-19 14:30:00", "DeliveryType": "Pick-Up",
+             "UserID": 1, "Name": "Demo Customer", "Email": "customer@bookstore.local"}
+    ITEMS = [{"BookID": 3, "Title": "Sapiens", "Quantity": 2, "Price": Decimal("54.23"),
+              "LineTotal": Decimal("108.46")}]
+
+    def test_buy_calls_place_order_and_opens_order_page(self):
+        client = self.client_as("Customer")
+        data = {"quantity": "2", "delivery": "Pick-Up", "csrf_token": "tok"}
+        with patch.object(app, "call_procedure", return_value=[[{"NewOrderID": 42}]]) as proc:
+            response = client.post("/book/5/buy", data=data)
+        self.assertEqual(proc.call_args.args, ("PlaceOrder", (1, 5, 2, "Pick-Up")))
+        self.assertTrue(response.headers["Location"].endswith("/orders/42"))
+        with client.session_transaction() as session:
+            self.assertIn(("success", "Order #42 placed."), session["_flashes"])
+
+    def test_buy_out_of_stock_shows_message(self):
+        client = self.client_as("Customer")
+        error = app.Error(msg="Book unavailable or insufficient stock", errno=1644)
+        data = {"quantity": "9", "delivery": "Delivery", "csrf_token": "tok"}
+        with patch.object(app, "call_procedure", side_effect=error), \
+             patch.object(app, "query_one", return_value={"Title": "Sapiens", "Quantity": 3}):
+            response = client.post("/book/5/buy", data=data)
+        self.assertTrue(response.headers["Location"].endswith("/book/5"))
+        with client.session_transaction() as session:
+            message = session["_flashes"][0][1]
+        self.assertIn("Only 3 of Sapiens left", message)
+
+    def test_order_detail_shows_price_at_purchase_to_owner(self):
+        with patch.object(app, "query_one", return_value=self.ORDER), \
+             patch.object(app, "query_all", return_value=self.ITEMS):
+            response = self.client_as("Customer").get("/orders/7")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"$54.23", response.data)
+        self.assertIn(b"$108.46", response.data)
+
+    def test_order_detail_hides_other_customers_orders(self):
+        someone_else = {**self.ORDER, "UserID": 99}
+        with patch.object(app, "query_one", return_value=someone_else), \
+             patch.object(app, "query_all", return_value=self.ITEMS):
+            self.assertEqual(self.client_as("Customer").get("/orders/7").status_code, 404)
+        with patch.object(app, "query_one", return_value=None):
+            self.assertEqual(self.client_as("Customer").get("/orders/999").status_code, 404)
+
+    def test_staff_can_open_any_order(self):
+        someone_else = {**self.ORDER, "UserID": 99}
+        with patch.object(app, "query_one", return_value=someone_else), \
+             patch.object(app, "query_all", return_value=self.ITEMS):
+            response = self.client_as("Staff").get("/orders/7")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"customer@bookstore.local", response.data)
+
+    def test_manage_orders_page_is_staff_only(self):
+        self.assertEqual(self.client_as("Customer").get("/admin/orders").status_code, 403)
+        self.assertEqual(self.client_as(None).get("/admin/orders").status_code, 302)
+        rows = [{"OrderID": 7, "OrderDate": "2026-11-19", "DeliveryType": "Pick-Up",
+                 "Name": "Demo Customer", "Email": "customer@bookstore.local",
+                 "Units": 2, "Total": Decimal("108.46")}]
+        summary = {"Orders": 1, "Units": 2, "Revenue": Decimal("108.46")}
+        with patch.object(app, "query_one", return_value=summary), \
+             patch.object(app, "query_all", return_value=rows):
+            response = self.client_as("Staff").get("/admin/orders")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Manage orders", response.data)
+        self.assertIn(b"Demo Customer", response.data)
+
+    def test_manage_orders_filters_use_parameters(self):
+        summary = {"Orders": 0, "Units": 0, "Revenue": Decimal("0")}
+        with patch.object(app, "query_one", return_value=summary) as one, \
+             patch.object(app, "query_all", return_value=[]):
+            response = self.client_as("Staff").get("/admin/orders?period=week&q=Demo&delivery=Pick-Up")
+        self.assertEqual(response.status_code, 200)
+        sql, params = one.call_args.args
+        self.assertIn("INTERVAL 6 DAY", sql)
+        self.assertEqual(params, ["%demo%", "%demo%", "Pick-Up"])
+        self.assertNotIn("Demo", sql)
+        with patch.object(app, "query_one", return_value=summary) as one, \
+             patch.object(app, "query_all", return_value=[]):
+            self.client_as("Staff").get("/admin/orders?q=%2342&period=bogus")
+        sql, params = one.call_args.args
+        self.assertIn("o.OrderID = %s", sql)
+        self.assertEqual(params, [42])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -70,3 +70,11 @@ IMPORTANT
 - Never commit `.env`, `venv`, database backups, or private user data.
 - Check `git status` before pulling. Save unfinished work on your own branch first.
 - Do not use the database reset command unless you intentionally want to delete and rebuild your local database.
+
+## Orders, reports, and database roles
+
+- Customers buy through the `PlaceOrder` stored procedure. They then land on the order's page at `/orders/<id>`, which shows the books, quantities, prices at purchase, and the total.
+- Customers can open only their own orders. Staff can see every order at `/admin/orders`.
+- `backend_queries.sql` has the reporting queries: overdue loans, low stock, sales by category, top sellers, and one customer's order history.
+- `performance_tests.sql` and `python load_test.py search|orders` produce the evidence in `Project Documentation/performance.md`.
+- `roles.sql` defines the `bookstore_customer` and `bookstore_staff` database roles, plus two demo users. Run it as root after `python setup_database.py`, and run it again after every setup, because setup re-creates the procedures. **The Flask app connects as one database user and enforces the Customer/Staff roles in code. These database roles are the documented design and are used in the demo; the app does not use them.**

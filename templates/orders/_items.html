@@ -1,0 +1,23 @@
+{# Shared line-item table. Expects `order` and `items`. #}
+<table class="order-items">
+  <thead>
+    <tr><th>Book</th><th>Category</th><th class="num">Qty</th><th class="num">Price at purchase</th><th class="num">Line total</th></tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr>
+      <td><a href="{{ url_for('book_detail', book_id=item.BookID) }}">{{ item.Title }}</a></td>
+      <td>{{ item.CategoryName or 'Uncategorized' }}</td>
+      <td class="num">{{ item.Quantity }}</td>
+      <td class="num">
+        ${{ '%.2f'|format(item.PriceAtPurchase) }}
+        {% if item.CurrentPrice != item.PriceAtPurchase %}<br><small class="muted">now ${{ '%.2f'|format(item.CurrentPrice) }}</small>{% endif %}
+      </td>
+      <td class="num">${{ '%.2f'|format(item.LineTotal) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><td colspan="2">Total</td><td class="num">{{ order.Units }}</td><td></td><td class="num">${{ '%.2f'|format(order.Total) }}</td></tr>
+  </tfoot>
+</table>

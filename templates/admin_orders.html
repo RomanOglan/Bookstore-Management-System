@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}
+  Manage orders
+{% endblock %}
+{% block content %}
+  <h1>Manage orders</h1>
+  <nav class="filters" aria-label="Order period">
+    {% for key, item in periods.items() %}
+      {% if key == period %}
+        <strong>{{ item[0] }}</strong>
+      {% else %}
+        <a href="{{ url_for('admin_orders', period=key, q=search or None, delivery=delivery or None) }}">{{ item[0] }}</a>
+      {% endif %}
+    {% endfor %}
+  </nav>
+  <form method="get" class="filters">
+    <input type="hidden" name="period" value="{{ period }}">
+    <input type="search" name="q" value="{{ search }}" placeholder="Customer name, email, or order #">
+    <select name="delivery">
+      <option value="">Delivery and pick-up</option>
+      {% for option in ['Delivery', 'Pick-Up'] %}
+        <option value="{{ option }}" {% if option == delivery %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+    <button>Search</button>
+    {% if search or delivery %}
+      <a href="{{ url_for('admin_orders', period=period) }}">Clear</a>
+    {% endif %}
+  </form>
+  <p>
+    {{ summary.Orders }} order{{ '' if summary.Orders == 1 else 's' }},
+    {{ summary.Units }} book{{ '' if summary.Units == 1 else 's' }} sold,
+    ${{ '%.2f'|format(summary.Revenue) }} in sales.
+  </p>
+  {% if orders %}
+    <table>
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Customer</th>
+          <th>Date</th>
+          <th>Delivery</th>
+          <th>Items</th>
+          <th>Total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for order in orders %}
+          <tr>
+            <td>#{{ order.OrderID }}</td>
+            <td>{{ order.Name }}<br><small class="muted">{{ order.Email }}</small></td>
+            <td>{{ order.OrderDate }}</td>
+            <td>{{ order.DeliveryType }}</td>
+            <td>{{ order.Units }}</td>
+            <td>${{ '%.2f'|format(order.Total) }}</td>
+            <td><a href="{{ url_for('order_detail', order_id=order.OrderID) }}">View</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <nav class="pagination" aria-label="Order pages">
+      {% if page > 1 %}
+        <a href="{{ url_for('admin_orders', period=period, q=search or None, delivery=delivery or None, page=page-1) }}">Previous</a>
+      {% endif %}
+      <span>Page {{ page }} of {{ pages }}</span>
+      {% if page < pages %}
+        <a href="{{ url_for('admin_orders', period=period, q=search or None, delivery=delivery or None, page=page+1) }}">Next</a>
+      {% endif %}
+    </nav>
+  {% else %}
+    <div class="empty">No orders match.</div>
+  {% endif %}
+{% endblock %}

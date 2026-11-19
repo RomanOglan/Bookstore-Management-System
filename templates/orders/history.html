@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}My orders{% endblock %}
+{% block content %}
+<h1>My orders</h1>
+{% if orders %}
+<p class="muted">{{ orders|length }} order{% if orders|length != 1 %}s{% endif %} &middot; ${{ '%.2f'|format(lifetime) }} spent in total</p>
+<table>
+  <thead>
+    <tr><th>Order</th><th>Date</th><th>Books</th><th>Fulfilment</th><th class="num">Items</th><th class="num">Total</th></tr>
+  </thead>
+  <tbody>
+    {% for order in orders %}
+    <tr>
+      <td><a href="{{ url_for('orders.detail', order_id=order.OrderID) }}">#{{ order.OrderID }}</a></td>
+      <td>{{ order.OrderDate }}</td>
+      <td>{{ order.FirstTitle or '—' }}{% if order.Titles > 1 %} <span class="muted">+ {{ order.Titles - 1 }} more</span>{% endif %}</td>
+      <td>{{ order.DeliveryType }}</td>
+      <td class="num">{{ order.Units }}</td>
+      <td class="num">${{ '%.2f'|format(order.Total) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty"><h2>No orders yet</h2><p><a href="{{ url_for('home') }}">Browse the catalog</a> to place your first order.</p></div>
+{% endif %}
+{% endblock %}

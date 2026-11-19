@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}All orders{% endblock %}
+{% block content %}
+<h1>All orders</h1>
+<form class="search" method="get">
+  <label>Customer name, email, or order #<input name="q" value="{{ filters.q }}" placeholder="e.g. demo or #12"></label>
+  <label>Fulfilment<select name="delivery"><option value="">Any</option>{% for d in delivery_types %}<option {% if filters.delivery == d %}selected{% endif %}>{{ d }}</option>{% endfor %}</select></label>
+  <label>From<input type="date" name="from" value="{{ filters.from }}"></label>
+  <label>To<input type="date" name="to" value="{{ filters.to }}"></label>
+  <button>Filter</button>
+</form>
+<div class="order-summary">
+  <div><span class="eyebrow">Orders</span><strong>{{ summary.Orders }}</strong></div>
+  <div><span class="eyebrow">Units sold</span><strong>{{ summary.Units }}</strong></div>
+  <div><span class="eyebrow">Revenue</span><strong>${{ '%.2f'|format(summary.Revenue) }}</strong></div>
+</div>
+{% if orders %}
+<table>
+  <thead>
+    <tr><th>Order</th><th>Date</th><th>Customer</th><th>Fulfilment</th><th class="num">Titles</th><th class="num">Items</th><th class="num">Total</th></tr>
+  </thead>
+  <tbody>
+    {% for order in orders %}
+    <tr>
+      <td><a href="{{ url_for('orders.detail', order_id=order.OrderID) }}">#{{ order.OrderID }}</a></td>
+      <td>{{ order.OrderDate }}</td>
+      <td>{{ order.Name }}<br><small class="muted">{{ order.Email }}</small></td>
+      <td>{{ order.DeliveryType }}</td>
+      <td class="num">{{ order.Titles }}</td>
+      <td class="num">{{ order.Units }}</td>
+      <td class="num">${{ '%.2f'|format(order.Total) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<nav class="pagination" aria-label="Order pages">
+  {% if page > 1 %}<a href="{{ url_for('orders.all_orders', page=page-1, **filters) }}">Previous</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="{{ url_for('orders.all_orders', page=page+1, **filters) }}">Next</a>{% endif %}
+</nav>
+{% else %}
+<div class="empty">No orders match these filters.</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Order #{{ order.OrderID }}{% endblock %}
+{% block content %}
+{% if session.role == 'Staff' %}
+  <a href="{{ url_for('orders.all_orders') }}">&larr; All orders</a>
+{% else %}
+  <a href="{{ url_for('orders.history') }}">&larr; My orders</a>
+{% endif %}
+<h1>Order #{{ order.OrderID }}</h1>
+<div class="order-summary">
+  <div><span class="eyebrow">Placed</span><strong>{{ order.OrderDate }}</strong></div>
+  <div><span class="eyebrow">Fulfilment</span><strong>{{ order.DeliveryType }}</strong></div>
+  <div><span class="eyebrow">Items</span><strong>{{ order.Units }}</strong></div>
+  <div><span class="eyebrow">Total</span><strong>${{ '%.2f'|format(order.Total) }}</strong></div>
+  {% if session.role == 'Staff' %}
+  <div><span class="eyebrow">Customer</span><strong>{{ order.Name }}</strong><br><small>{{ order.Email }}</small></div>
+  {% endif %}
+</div>
+{% if items %}
+  {% include "orders/_items.html" %}
+  <p class="muted">Prices are what was charged when the order was placed. If a price has changed since, the current price is shown underneath.</p>
+{% else %}
+  <div class="empty">This order has no line items.</div>
+{% endif %}
+{% endblock %}
