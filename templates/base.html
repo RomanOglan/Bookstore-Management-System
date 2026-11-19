@@ -1,18 +1,37 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>{% block title %}Bookstore{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Bookstore{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <nav>
-        <a href="{{ url_for('home') }}">Home</a> |
-        <a href="{{ url_for('dbtest') }}">DB Test</a>
+  <header>
+    <nav aria-label="Main navigation">
+      <a class="brand" href="{{ url_for('home') }}">Windsor Books</a>
+      <div class="nav-links">
+        {% if session.user_id %}
+          <a href="{{ url_for('orders') }}">My orders</a>
+          <a href="{{ url_for('loans') }}">My loans</a>
+          {% if session.role == 'Staff' %}
+            <a href="{{ url_for('admin_books') }}">Manage books</a>
+            <a href="{{ url_for('admin_loans') }}">Manage loans</a>
+          {% endif %}
+          <span>{{ session.name }} ({{ session.role }})</span>
+          <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link-button">Sign out</button></form>
+        {% else %}
+          <a href="{{ url_for('login') }}">Sign in</a>
+        {% endif %}
+      </div>
     </nav>
-    <hr>
-    <main>
-        {% block content %}{% endblock %}
-    </main>
+  </header>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="flash {{ category }}" role="alert">{{ message }}</div>{% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer><a href="{{ url_for('dbtest') }}">Database status</a></footer>
 </body>
 </html>

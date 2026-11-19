@@ -1,6 +1,22 @@
 {% extends "base.html" %}
-{% block title %}Home - Bookstore{% endblock %}
+{% block title %}Catalog - Windsor Books{% endblock %}
 {% block content %}
-    <h1>Bookstore</h1>
-    <p>Flask is running.</p>
+<section class="hero"><p class="eyebrow">Online bookstore & library</p><h1>Find your next book</h1><p>{{ total }} matching record{% if total != 1 %}s{% endif %}</p></section>
+<form class="search" method="get">
+  <label>Title, author, or ISBN<input name="q" value="{{ search }}" placeholder="Search the catalog"></label>
+  <label>Category<select name="category"><option value="">All categories</option>{% for category in categories %}<option value="{{ category.CategoryID }}" {% if selected_category == category.CategoryID %}selected{% endif %}>{{ category.CategoryName }}</option>{% endfor %}</select></label>
+  <button>Search</button>
+</form>
+{% if books %}
+<div class="grid">
+  {% for book in books %}
+  <article class="card"><div class="book-mark">{{ book.Title[0] }}</div><p class="eyebrow">{{ book.CategoryName or 'Uncategorized' }}</p><h2><a href="{{ url_for('book_detail', book_id=book.BookID) }}">{{ book.Title }}</a></h2><p>{{ book.AuthorName or 'Author not provided' }}</p><div class="card-bottom"><strong>${{ '%.2f'|format(book.Price) }}</strong><span>{% if book.Quantity is none %}Stock not set{% else %}{{ book.Quantity }} for sale{% endif %}</span></div></article>
+  {% endfor %}
+</div>
+<nav class="pagination" aria-label="Catalog pages">
+  {% if page > 1 %}<a href="{{ url_for('home', q=search, category=selected_category, page=page-1) }}">Previous</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="{{ url_for('home', q=search, category=selected_category, page=page+1) }}">Next</a>{% endif %}
+</nav>
+{% else %}<div class="empty"><h2>No books found</h2><p>Try a shorter title, author, or ISBN.</p></div>{% endif %}
 {% endblock %}
