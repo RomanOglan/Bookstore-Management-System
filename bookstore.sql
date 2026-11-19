@@ -1,118 +1,89 @@
-CREATE DATABASE IF NOT EXISTS Bookstore;
+-- Bookstore schema. Load order: this file, test_data.sql, stored_procedures.sql, triggers.sql
+DROP DATABASE IF EXISTS Bookstore;
+CREATE DATABASE Bookstore;
 USE Bookstore;
 
+CREATE TABLE Users (
+    UserID        INT UNSIGNED AUTO_INCREMENT,
+    Name          VARCHAR(100) NOT NULL,
+    Email         VARCHAR(255) NOT NULL UNIQUE,
+    PasswordHash  VARCHAR(255) NOT NULL,
+    Role          ENUM('Customer', 'Staff') NOT NULL,
+    AccountStatus ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
+    PRIMARY KEY (UserID)
+);
 
-CREATE TABLE IF NOT EXISTS Author (
-    AuthorID INT UNSIGNED AUTO_INCREMENT,
-    AuthorName VARCHAR(50), 
+CREATE TABLE Author (
+    AuthorID   INT UNSIGNED AUTO_INCREMENT,
+    AuthorName VARCHAR(100) NOT NULL,
     PRIMARY KEY (AuthorID)
 );
 
-CREATE TABLE IF NOT EXISTS Category (
-    CategoryID INT UNSIGNED AUTO_INCREMENT,
-    CategoryName VARCHAR(20),
+CREATE TABLE Category (
+    CategoryID   INT UNSIGNED AUTO_INCREMENT,
+    CategoryName VARCHAR(50) NOT NULL UNIQUE,
     PRIMARY KEY (CategoryID)
 );
 
-CREATE TABLE IF NOT EXISTS Books (
-    BookID INT UNSIGNED AUTO_INCREMENT,
-    ISBN INT UNIQUE,
-    Title VARCHAR(50),
-    Rating INT,  -- Adding rating cause its in our dataset so why not--
-    Description VARCHAR(50),
-    Price DECIMAL(19, 4),
-    Quantity SMALLINT UNSIGNED,
-    AuthorID INT UNSIGNED,
-    CategoryID INT UNSIGNED,
-    PRIMARY KEY(BookID),
-    FOREIGN KEY (AuthorID) REFERENCES Author (AuthorID),
-    FOREIGN KEY (CategoryID) REFERENCES Category (CategoryID)
+CREATE TABLE Books (
+    BookID      INT UNSIGNED AUTO_INCREMENT,
+    ISBN        VARCHAR(13) UNIQUE,
+    Title       VARCHAR(255) NOT NULL,
+    Rating      TINYINT UNSIGNED,
+    Description VARCHAR(500),
+    Price       DECIMAL(19, 4) NOT NULL,
+    Quantity    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    AuthorID    INT UNSIGNED,
+    CategoryID  INT UNSIGNED,
+    PRIMARY KEY (BookID),
+    FOREIGN KEY (AuthorID)   REFERENCES Author (AuthorID),
+    FOREIGN KEY (CategoryID) REFERENCES Category (CategoryID),
+    CHECK (Rating IS NULL OR Rating BETWEEN 0 AND 5),
+    INDEX idx_books_title (Title),
+    FULLTEXT INDEX ft_books_search (Title, Description)
 );
 
-CREATE TABLE IF NOT EXISTS Book_Copies (
-    CopyID INT UNSIGNED AUTO_INCREMENT,
-    Barcode CHAR(15) UNIQUE, -- Double check with group how we want to do BarCode--
-    CopyStatus ENUM ("Available", "On-Loan", "Unavailable"), -- Review these options--
-    BookID INT UNSIGNED,
-    PRIMARY KEY(CopyID),
+CREATE TABLE Book_Copies (
+    CopyID     INT UNSIGNED AUTO_INCREMENT,
+    Barcode    CHAR(15) NOT NULL UNIQUE,
+    CopyStatus ENUM('Available', 'On-Loan', 'Unavailable') NOT NULL DEFAULT 'Available',
+    BookID     INT UNSIGNED NOT NULL,
+    PRIMARY KEY (CopyID),
     FOREIGN KEY (BookID) REFERENCES Books (BookID)
 );
 
-
--- Added because was getting error when useres was bellow loans
-CREATE TABLE IF NOT EXISTS Users (
-    UserID INT UNSIGNED AUTO_INCREMENT,
-    Name VARCHAR(100),
-    Email VARCHAR(150) UNIQUE NOT NULL,
-    PasswordHash VARCHAR(250) NOT NULL,
-    Role ENUM ("Staff", "Customer") NOT NULL,
-    AccountStatus ENUM ("Active", "Inactive") DEFAULT("Active") NOT NULL,
-    PRIMARY KEY(UserID)
-);
-
-
-
-CREATE TABLE IF NOT EXISTS Loans (
-    LoanID INT UNSIGNED AUTO_INCREMENT,
-    UserID INT UNSIGNED,
-    BorrowedDate DATE,
-    DueDate DATE,
+CREATE TABLE Loans (
+    LoanID       INT UNSIGNED AUTO_INCREMENT,
+    UserID       INT UNSIGNED NOT NULL,
+    CopyID       INT UNSIGNED NOT NULL,
+    BorrowedDate DATE NOT NULL,
+    DueDate      DATE NOT NULL,
     ReturnedDate DATE,
-    -- Removing OverDue fee from table, we will calculate it in the backend using borroed Date and Returned Date (or lack thereof)
-    LoanStatus ENUM ("On-Loan", "Returned", "Late", "Available for Loan"),
-    CopyID INT UNSIGNED,
-    PRIMARY KEY(LoanID),
-    FOREIGN KEY(UserID) REFERENCES Users(UserID),
-    FOREIGN KEY(CopyID) REFERENCES Book_Copies(CopyID)
-    -- Removed BookID from Loans as we can grab it from Book_Copies using CopyID
+    LoanStatus   ENUM('On-Loan', 'Returned', 'Late') NOT NULL DEFAULT 'On-Loan',
+    PRIMARY KEY (LoanID),
+    FOREIGN KEY (UserID) REFERENCES Users (UserID),
+    FOREIGN KEY (CopyID) REFERENCES Book_Copies (CopyID),
+    INDEX idx_loans_due (DueDate, ReturnedDate)
 );
 
--- CREATE TABLE IF NOT EXISTS Users (
---     UserID INT UNSIGNED AUTO_INCREMENT,
---     Name VARCHAR(100),
---     Email VARCHAR(50) UNIQUE NOT NULL,
---     PasswordHash VARCHAR(250) NOT NULL,
---     Role ENUM ("Admin", "Users") NOT NULL,
---     AccountStatus ENUM ("Active", "Unactive") DEFAULT("Active") NOT NULL,
---     PRIMARY KEY(UserID)
--- );
-
--- CREATE TABLE IF NOT EXISTS Order_Items (
---     BookID INT UNSIGNED,
---     OrderID INT UNSIGNED,
---     Quantity VARCHAR(20),
---     Price DECIMAL(19, 4),
---     PRIMARY KEY(BookID, OrderID),
---     FOREIGN KEY(BookID) REFERENCES Books(BookID),
---     FOREIGN KEY(OrderID) REFERENCES Orders (OrderID)
--- );
-
--- CREATE TABLE IF NOT EXISTS Orders (
---     OrderID INT UNSIGNED AUTO_INCREMENT,
---     OrderDate DATE,
---     DeliveryType ENUM ("Delivery", "Pick-Up"),
---     UserID INT UNSIGNED,
---     PRIMARY KEY (OrderID),
---     FOREIGN KEY (UserID) REFERENCES Users (UserID)
--- );
-
-CREATE TABLE IF NOT EXISTS Orders (
-    OrderID INT UNSIGNED AUTO_INCREMENT,
-    OrderDate DATE,
-    DeliveryType ENUM("Delivery", "Pick-Up"),
-    UserID INT UNSIGNED,
+CREATE TABLE Orders (
+    OrderID      INT UNSIGNED AUTO_INCREMENT,
+    OrderDate    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    DeliveryType ENUM('Delivery', 'Pick-Up') NOT NULL,
+    UserID       INT UNSIGNED NOT NULL,
     PRIMARY KEY (OrderID),
-    FOREIGN KEY (UserID) REFERENCES Users(UserID)
+    FOREIGN KEY (UserID) REFERENCES Users (UserID)
 );
 
-CREATE TABLE IF NOT EXISTS Order_Items (
-    BookID INT UNSIGNED,
-    OrderID INT UNSIGNED,
-    Quantity VARCHAR(20),
-    Price DECIMAL(19, 4),
+CREATE TABLE Order_Items (
+    BookID   INT UNSIGNED NOT NULL,
+    OrderID  INT UNSIGNED NOT NULL,
+    Quantity SMALLINT UNSIGNED NOT NULL,
+    Price    DECIMAL(19, 4) NOT NULL,
     PRIMARY KEY (BookID, OrderID),
-    FOREIGN KEY (BookID) REFERENCES Books(BookID),
-    FOREIGN KEY (OrderID) REFERENCES Orders(OrderID)
+    FOREIGN KEY (BookID)  REFERENCES Books (BookID),
+    FOREIGN KEY (OrderID) REFERENCES Orders (OrderID),
+    CHECK (Quantity > 0)
 );
 
-SHOW TABLEs;
+SHOW TABLES;
