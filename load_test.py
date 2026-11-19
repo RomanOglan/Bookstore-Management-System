@@ -7,7 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 from mysql.connector import Error
 
-from db import get_connection
+import mysql.connector
+
+from db import connection_settings
+
+
+def get_connection():
+    # Pure-Python driver: the C extension can crash (segmentation fault) with 50 threads.
+    return mysql.connector.connect(**connection_settings(), use_pure=True)
 
 THREADS = 50
 TARGET_MS = 500
