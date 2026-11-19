@@ -107,18 +107,28 @@ def book_form_values(form):
     if isbn and (not isbn.isdigit() or len(isbn) not in {10, 13}):
         raise ValueError("ISBN must contain exactly 10 or 13 digits.")
     try:
-        price = Decimal(form.get("price", ""))
+        price = Decimal(form.get("price", "").strip())
     except InvalidOperation:
-        raise ValueError("Price must be a number.")
-    if not price.is_finite() or price < 0:
+        raise ValueError("Price must be a number, for example 12.99.")
+    if not price.is_finite():
+        raise ValueError("Price must be a number, for example 12.99.")
+    if price < 0:
         raise ValueError("Price cannot be negative.")
+    if price >= 100000000:
+        raise ValueError("Price is too large.")
     quantity_text = form.get("quantity", "").strip()
-    quantity = None if not quantity_text else int(quantity_text)
+    try:
+        quantity = None if not quantity_text else int(quantity_text)
+    except ValueError:
+        raise ValueError("Quantity must be a whole number.")
     if quantity is not None and quantity < 0:
         raise ValueError("Quantity cannot be negative.")
     if quantity is not None and quantity > 65535:
         raise ValueError("Quantity cannot exceed 65535.")
-    category_id = int(form.get("category_id", ""))
+    try:
+        category_id = int(form.get("category_id", ""))
+    except ValueError:
+        raise ValueError("Choose a category.")
     return title, isbn, description, price, quantity, category_id
 
 
@@ -368,7 +378,9 @@ def add_book():
 @app.route("/admin/book/<int:book_id>/edit", methods=["GET", "POST"])
 @staff_required
 def edit_book(book_id):
-    book = query_one("SELECT * FROM Books WHERE BookID=%s", (book_id,))
+    book = query_one(
+        """SELECT b.*, a.AuthorName FROM Books b
+             LEFT JOIN Author a ON a.AuthorID = b.AuthorID WHERE b.BookID=%s""", (book_id,))
     if not book:
         abort(404)
     categories = query_all("SELECT CategoryID, CategoryName FROM Category ORDER BY CategoryName")
@@ -376,18 +388,16 @@ def edit_book(book_id):
         require_csrf()
         try:
             values = book_form_values(request.form)
-            conn = get_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute("""UPDATE Books SET Title=%s, ISBN=%s, Description=%s, Price=%s,
-                               Quantity=%s, CategoryID=%s WHERE BookID=%s""", (*values, book_id))
-                conn.commit(); cur.close()
-            finally:
-                conn.close()
+            author = request.form.get("author", "").strip()[:100] or None
+            call_procedure("UpdateBook", (book_id, *values, author))
             flash("Book updated.", "success")
             return redirect(url_for("book_detail", book_id=book_id))
         except (ValueError, TypeError) as exc:
             flash(str(exc), "error")
+        except Error as exc:
+            if exc.errno != 1644:
+                raise
+            flash(exc.msg, "error")
     return render_template("book_form.html", book=book, categories=categories)
 
 
@@ -395,21 +405,26 @@ def edit_book(book_id):
 @staff_required
 def delete_book(book_id):
     require_csrf()
-    conn = get_connection()
     try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM Books WHERE BookID=%s", (book_id,))
-        conn.commit()
+        call_procedure("DeleteBook", (book_id,))
         flash("Book deleted.", "success")
     except Error as exc:
-        conn.rollback()
-        if exc.errno == 1451:
-            flash("This book has order, loan, or copy history and cannot be deleted.", "error")
-        else:
+        if exc.errno != 1644:
             raise
-    finally:
-        cur.close(); conn.close()
+        flash(exc.msg, "error")
+        return redirect(url_for("edit_book", book_id=book_id))
     return redirect(url_for("admin_books"))
+
+
+@app.route("/admin/low-stock")
+@staff_required
+def low_stock():
+    threshold = request.args.get("threshold", 3, type=int)
+    threshold = min(max(threshold, 0), 1000)
+    search = " ".join(request.args.get("q", "").split())[:100]
+    results = call_procedure("LowStockReport", (threshold, search))
+    books = results[0] if results else []
+    return render_template("low_stock.html", books=books, threshold=threshold, search=search)
 
 
 @app.post("/admin/book/<int:book_id>/restock")
@@ -434,17 +449,16 @@ def restock_book(book_id):
 def add_copy(book_id):
     require_csrf()
     barcode = request.form.get("barcode", "").strip()
-    if not barcode or len(barcode) > 50:
-        flash("Enter a barcode up to 50 characters.", "error")
+    if len(barcode) > 50:
+        flash("Barcode can be at most 50 characters.", "error")
     else:
-        conn = get_connection()
         try:
-            cur = conn.cursor()
-            cur.execute("INSERT INTO Book_Copies (Barcode, BookID) VALUES (%s,%s)", (barcode, book_id))
-            conn.commit(); cur.close()
+            call_procedure("AddBookCopy", (book_id, barcode))
             flash("Lendable copy added.", "success")
-        finally:
-            conn.close()
+        except Error as exc:
+            if exc.errno != 1644:
+                raise
+            flash(exc.msg, "error")
     return redirect(url_for("book_detail", book_id=book_id))
 
 

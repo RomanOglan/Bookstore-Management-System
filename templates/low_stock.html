@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}
+  Low stock
+{% endblock %}
+{% block content %}
+  <div class="heading-row">
+    <h1>Low stock</h1>
+    <a href="{{ url_for('admin_books') }}">Back to inventory</a>
+  </div>
+  <form method="get" class="filters">
+    <input type="search" name="q" value="{{ search }}" placeholder="Title, author or ISBN">
+    <label>
+      Show books with at most
+      <input type="number" name="threshold" min="0" max="1000" value="{{ threshold }}" style="width:5.5rem">
+      copies
+    </label>
+    <button>Search</button>
+    {% if search %}
+      <a href="{{ url_for('low_stock', threshold=threshold) }}">Clear</a>
+    {% endif %}
+  </form>
+  <p>{{ books|length }} book{{ '' if books|length == 1 else 's' }} found.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Author</th>
+        <th>Category</th>
+        <th>Quantity</th>
+        <th>Restock</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for book in books %}
+        <tr>
+          <td><a href="{{ url_for('book_detail', book_id=book.BookID) }}">{{ book.Title }}</a></td>
+          <td>{{ book.AuthorName or '—' }}</td>
+          <td>{{ book.CategoryName or '—' }}</td>
+          <td>{{ book.Quantity if book.Quantity is not none else 'Not set' }}</td>
+          <td>
+            <form method="post" action="{{ url_for('restock_book', book_id=book.BookID) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="number" name="amount" min="1" max="10000" placeholder="+ qty" required style="width:5.5rem">
+              <button>Add</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if not books %}
+    <p>No books match.</p>
+  {% endif %}
+{% endblock %}

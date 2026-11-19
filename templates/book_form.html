@@ -28,12 +28,10 @@
           <input type="number" name="quantity" min="0" value="{{ book.Quantity if book and book.Quantity is not none else '' }}">
         </label>
       </div>
-      {% if not book %}
-        <label>
-          Author (optional)
-          <input name="author" maxlength="100">
-        </label>
-      {% endif %}
+      <label>
+        Author (optional)
+        <input name="author" maxlength="100" value="{{ book.AuthorName or '' if book else '' }}">
+      </label>
       <label>
         Category
         <select name="category_id" required>
