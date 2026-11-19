@@ -1,5 +1,9 @@
 USE Bookstore;
 
+DROP PROCEDURE IF EXISTS SearchBooks;
+DROP PROCEDURE IF EXISTS PlaceOrder;
+DROP PROCEDURE IF EXISTS BorrowBook;
+
 DELIMITER $$
 
 -- first procedure, in a case of searching for books
@@ -8,9 +12,10 @@ BEGIN
     SELECT b.BookID, b.ISBN, b.Title,
            a.AuthorName, b.Price, b.Quantity
     FROM Books b
-    JOIN Author a ON b.AuthorID = a.AuthorID
+    LEFT JOIN Author a ON b.AuthorID = a.AuthorID
     WHERE LOWER(b.Title) LIKE CONCAT('%', LOWER(TRIM(searchText)), '%')
-       OR LOWER(a.AuthorName) LIKE CONCAT('%', LOWER(TRIM(searchText)), '%');
+       OR LOWER(COALESCE(a.AuthorName, '')) LIKE CONCAT('%', LOWER(TRIM(searchText)), '%')
+       OR b.ISBN LIKE CONCAT('%', TRIM(searchText), '%');
 END $$
 
 -- for procedure 2, case in placing an order and update inventory
@@ -87,6 +92,7 @@ CREATE PROCEDURE BorrowBook(
 )
 BEGIN
     DECLARE v_Status VARCHAR(20);
+    DECLARE v_ActiveLoans INT DEFAULT 0;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -102,6 +108,15 @@ BEGIN
     ) THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Active user not found';
+    END IF;
+
+    SELECT COUNT(*) INTO v_ActiveLoans
+    FROM Loans
+    WHERE UserID = p_UserID AND LoanStatus IN ('On-Loan', 'Late');
+
+    IF v_ActiveLoans >= 5 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Borrowing limit reached';
     END IF;
 
     SELECT CopyStatus INTO v_Status
