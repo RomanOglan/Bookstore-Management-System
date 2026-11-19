@@ -147,6 +147,21 @@ def apply_demo_stock(conn):
     return updated
 
 
+def apply_demo_copies(conn):
+    """Give the first 50 books (by title) two lendable copies so borrowing can be demoed.
+    Only touches books that have no copies yet, so it is safe to re-run."""
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO Book_Copies (Barcode, BookID)
+                   SELECT CONCAT('DEMO-', b.BookID, '-', n.n), b.BookID
+                     FROM (SELECT BookID FROM Books ORDER BY Title LIMIT 50) b
+                     JOIN (SELECT 1 AS n UNION SELECT 2) n
+                    WHERE NOT EXISTS (SELECT 1 FROM Book_Copies bc WHERE bc.BookID = b.BookID)""")
+    added = cur.rowcount
+    conn.commit()
+    cur.close()
+    return added
+
+
 def ensure_demo_users(conn):
     """Create local demo logins only when those emails do not already exist."""
     cur = conn.cursor()
@@ -179,12 +194,14 @@ def main():
         apply_safe_migrations(conn)
         imported = import_catalog(conn)
         stocked = apply_demo_stock(conn)
+        copies = apply_demo_copies(conn)
         ensure_demo_users(conn)
         install_database_logic(conn)
     finally:
         conn.close()
     print(f"Database ready. Verified CSV catalog rows: {imported}.")
     print(f"Demo stock added to {stocked} books that had no quantity.")
+    print(f"Demo lendable copies added: {copies}.")
     print("Existing orders, loans, quantities, and non-CSV books were preserved." if not args.reset else "Bookstore was intentionally rebuilt.")
 
 
