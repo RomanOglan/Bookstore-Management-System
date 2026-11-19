@@ -1,1 +1,30 @@
-{% extends "base.html" %}{% block title %}Create account{% endblock %}{% block content %}<div class="panel narrow"><h1>Create account</h1><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Name<input name="name" maxlength="100" required autofocus></label><label>Email<input type="email" name="email" maxlength="255" required></label><label>Password (8+ characters)<input type="password" name="password" minlength="8" required></label><label>Confirm password<input type="password" name="confirm" minlength="8" required></label><button>Create account</button></form><p class="muted">Already registered? <a href="{{ url_for('login') }}">Sign in</a></p></div>{% endblock %}
+{% extends "base.html" %}
+{% block title %}
+  Create account
+{% endblock %}
+{% block content %}
+  <div class="panel narrow">
+    <h1>Create account</h1>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>
+        Name
+        <input name="name" maxlength="100" required autofocus>
+      </label>
+      <label>
+        Email
+        <input type="email" name="email" maxlength="255" required>
+      </label>
+      <label>
+        Password (8+ characters)
+        <input type="password" name="password" minlength="8" required>
+      </label>
+      <label>
+        Confirm password
+        <input type="password" name="confirm" minlength="8" required>
+      </label>
+      <button>Create account</button>
+    </form>
+    <p class="muted">Already registered? <a href="{{ url_for('login') }}">Sign in</a></p>
+  </div>
+{% endblock %}

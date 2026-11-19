@@ -53,6 +53,15 @@ class ValidationTests(unittest.TestCase):
             session.update(user_id=1, role="Staff", csrf_token="tok")
         return client
 
+    def test_staff_inventory_uses_search_procedure_with_paging(self):
+        client = self.staff_client()
+        with patch.object(app, "call_procedure", return_value=[[{"total": 120}], []]) as proc, \
+             patch.object(app, "query_all", return_value=[]):
+            response = client.get("/admin/books?q=  dune  &page=2")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(proc.call_args.args, ("SearchBooks", ("dune", None, 50, 50)))
+        self.assertIn(b"Page 2 of 3", response.data)
+
     def test_restock_calls_procedure(self):
         client = self.staff_client()
         with patch.object(app, "call_procedure", return_value=[[{"NewQuantity": 12}]]) as proc:
@@ -85,6 +94,116 @@ class ValidationTests(unittest.TestCase):
             if role:
                 session.update(user_id=1, role=role, name="Tester")
         return client
+
+    def test_friendly_number_errors(self):
+        base = {"title": "A Book", "price": "9.99", "quantity": "3", "category_id": "1"}
+        for field, bad, text in (("price", "abc", "Price must be a number"),
+                                 ("quantity", "x", "Quantity must be a whole number"),
+                                 ("category_id", "", "Choose a category")):
+            with self.assertRaises(ValueError) as ctx:
+                app.book_form_values(MultiDict({**base, field: bad}))
+            self.assertIn(text, str(ctx.exception))
+
+    def test_edit_book_calls_update_procedure_and_shows_error(self):
+        client = self.staff_client()
+        book = {"BookID": 5, "Title": "Old", "ISBN": None, "Description": None, "Price": Decimal("5"),
+                "Quantity": 1, "CategoryID": 1, "AuthorName": None}
+        form = {"title": "New", "isbn": "1234567890", "price": "9.99", "quantity": "3",
+                "category_id": "1", "author": "Some Author", "csrf_token": "tok"}
+        with patch.object(app, "query_one", return_value=book), \
+             patch.object(app, "query_all", return_value=[{"CategoryID": 1, "CategoryName": "Fiction"}]):
+            with patch.object(app, "call_procedure", return_value=[[{"BookID": 5}]]) as proc:
+                response = client.post("/admin/book/5/edit", data=form)
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(proc.call_args.args[0], "UpdateBook")
+            self.assertEqual(proc.call_args.args[1][0], 5)
+            self.assertEqual(proc.call_args.args[1][-1], "Some Author")
+            error = app.Error(msg="Another book already uses that ISBN", errno=1644)
+            with patch.object(app, "call_procedure", side_effect=error):
+                response = client.post("/admin/book/5/edit", data=form)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Another book already uses that ISBN", response.data)
+
+    def test_add_copy_duplicate_barcode_message(self):
+        client = self.staff_client()
+        error = app.Error(msg="That barcode is already in use", errno=1644)
+        with patch.object(app, "call_procedure", side_effect=error) as proc:
+            response = client.post("/admin/book/5/copy", data={"barcode": "BC-1", "csrf_token": "tok"},
+                                   follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("AddBookCopy", (5, "BC-1")))
+        with client.session_transaction() as session:
+            self.assertIn("That barcode is already in use", [m for _, m in session["_flashes"]])
+
+    def test_delete_book_uses_procedure_and_reports_block(self):
+        client = self.staff_client()
+        with patch.object(app, "call_procedure", return_value=[[{"DeletedBookID": 5}]]) as proc:
+            response = client.post("/admin/book/5/delete", data={"csrf_token": "tok"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("DeleteBook", (5,)))
+        error = app.Error(msg="This book appears in past orders and cannot be deleted", errno=1644)
+        with patch.object(app, "call_procedure", side_effect=error):
+            response = client.post("/admin/book/5/delete", data={"csrf_token": "tok"})
+        self.assertIn("/admin/book/5/edit", response.headers["Location"])
+
+    def test_low_stock_page_staff_only_and_calls_procedure(self):
+        self.assertEqual(self.client_as("Customer").get("/admin/low-stock").status_code, 403)
+        client = self.staff_client()
+        rows = [{"BookID": 1, "Title": "Tiny Stock", "Quantity": 1, "AuthorName": None, "CategoryName": "Fiction"}]
+        with patch.object(app, "call_procedure", return_value=[rows]) as proc:
+            response = client.get("/admin/low-stock?threshold=5&q=%20tiny%20%20stock%20")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(proc.call_args.args, ("LowStockReport", (5, "tiny stock")))
+        self.assertIn(b"Tiny Stock", response.data)
+
+    def test_borrow_calls_procedure_and_shows_error(self):
+        client = self.client_as("Customer")
+        with patch.object(app, "call_procedure", return_value=[[{"NewLoanID": 9}]]) as proc:
+            response = client.post("/book/5/borrow", data={"csrf_token": "tok"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("BorrowBook", (1, 5)))
+        error = app.Error(msg="Return your overdue books before borrowing more", errno=1644)
+        with patch.object(app, "call_procedure", side_effect=error):
+            client.post("/book/5/borrow", data={"csrf_token": "tok"})
+        with client.session_transaction() as session:
+            self.assertIn("Return your overdue books before borrowing more", [m for _, m in session["_flashes"]])
+
+    def test_customer_return_passes_own_user_id(self):
+        client = self.client_as("Customer")
+        result = [[{"LoanID": 3, "DaysLate": 4, "LateFee": Decimal("1.00")}]]
+        with patch.object(app, "call_procedure", return_value=result) as proc:
+            response = client.post("/loan/3/return", data={"csrf_token": "tok"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("ReturnBook", (3, 1)))
+        with client.session_transaction() as session:
+            self.assertIn("Book returned 4 day(s) late. Late fee: $1.00.", [m for _, m in session["_flashes"]])
+
+    def test_staff_return_uses_no_owner_and_loan_filter_is_whitelisted(self):
+        client = self.staff_client()
+        result = [[{"LoanID": 3, "DaysLate": 0, "LateFee": Decimal("0.00")}]]
+        with patch.object(app, "call_procedure", return_value=result) as proc:
+            client.post("/admin/loan/3/return", data={"csrf_token": "tok"})
+        self.assertEqual(proc.call_args.args, ("ReturnBook", (3, None)))
+        with patch.object(app, "call_procedure", return_value=[[{"MarkedLate": 0}]]) as proc, \
+             patch.object(app, "query_all", return_value=[]) as query:
+            response = client.get("/admin/loans?status=late;DROP")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(proc.call_args.args[0], "MarkOverdueLoans")
+        self.assertIn("l.LoanStatus IN ('On-Loan', 'Late')", query.call_args.args[0])
+        with patch.object(app, "call_procedure", return_value=[[{"MarkedLate": 0}]]), \
+             patch.object(app, "query_all", return_value=[]) as query:
+            client.get("/admin/loans?status=late")
+        self.assertIn("l.LoanStatus = 'Late'", query.call_args.args[0])
+
+    def test_loans_page_shows_fee_total(self):
+        client = self.client_as("Customer")
+        rows = [{"LoanID": 1, "Name": "T", "Title": "Late Book", "Barcode": "B1", "BorrowedDate": "2026-10-01",
+                 "DueDate": "2026-10-15", "ReturnedDate": None, "LoanStatus": "Late", "Fee": Decimal("1.50")}]
+        with patch.object(app, "call_procedure", return_value=[[{"MarkedLate": 0}]]), \
+             patch.object(app, "query_all", return_value=rows):
+            response = client.get("/loans")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Late fees: $1.50", response.data)
 
     def test_dbtest_is_staff_only(self):
         self.assertEqual(self.client_as(None).get("/dbtest").status_code, 302)
