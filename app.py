@@ -1,11 +1,12 @@
 import os
+import re
 import secrets
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from mysql.connector import Error
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from db import get_connection
 
@@ -59,6 +60,18 @@ def staff_required(view):
         if not session.get("user_id"):
             return redirect(url_for("login", next=request.path))
         if session.get("role") != "Staff":
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def customer_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            flash("Please sign in first.", "error")
+            return redirect(url_for("login", next=request.path))
+        if session.get("role") != "Customer":
             abort(403)
         return view(*args, **kwargs)
     return wrapped
@@ -168,6 +181,48 @@ def login():
     return render_template("login.html")
 
 
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        require_csrf()
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        problem = None
+        if not name or len(name) > 100:
+            problem = "Enter your name (100 characters or fewer)."
+        elif len(email) > 255 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            problem = "Enter a valid email address."
+        elif len(password) < 8:
+            problem = "Password must be at least 8 characters."
+        elif password != request.form.get("confirm", ""):
+            problem = "The two passwords do not match."
+        if problem:
+            flash(problem, "error")
+        else:
+            conn = get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO Users (Name, Email, PasswordHash, Role, AccountStatus) "
+                    "VALUES (%s, %s, %s, 'Customer', 'Active')",
+                    (name, email, generate_password_hash(password)),
+                )
+                conn.commit()
+                cur.close()
+            except Error as exc:
+                conn.rollback()
+                if exc.errno != 1062:
+                    raise
+                flash("That email is already registered.", "error")
+            else:
+                flash("Account created. Please sign in.", "success")
+                return redirect(url_for("login"))
+            finally:
+                conn.close()
+    return render_template("register.html")
+
+
 @app.post("/logout")
 @login_required
 def logout():
@@ -177,7 +232,7 @@ def logout():
 
 
 @app.post("/book/<int:book_id>/buy")
-@login_required
+@customer_required
 def buy_book(book_id):
     require_csrf()
     try:
@@ -416,6 +471,7 @@ def return_loan(loan_id):
 
 
 @app.route("/dbtest")
+@staff_required
 def dbtest():
     counts = query_one("SELECT COUNT(*) AS books, SUM(SourceURL IS NOT NULL) AS imported FROM Books")
     return render_template("dbtest.html", count=counts["books"], imported=counts["imported"])

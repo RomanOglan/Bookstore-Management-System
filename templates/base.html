@@ -22,6 +22,7 @@
           <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link-button">Sign out</button></form>
         {% else %}
           <a href="{{ url_for('login') }}">Sign in</a>
+          <a href="{{ url_for('register') }}">Register</a>
         {% endif %}
       </div>
     </nav>
@@ -32,6 +33,6 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
-  <footer><a href="{{ url_for('dbtest') }}">Database status</a></footer>
+  {% if session.role == 'Staff' %}<footer><a href="{{ url_for('dbtest') }}">Database status</a></footer>{% endif %}
 </body>
 </html>
