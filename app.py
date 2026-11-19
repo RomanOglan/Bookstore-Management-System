@@ -305,26 +305,6 @@ def orders():
     return render_template("orders.html", orders=rows)
 
 
-@app.route("/orders/<int:order_id>")
-@login_required
-def order_detail(order_id):
-    order = query_one(
-        """SELECT o.OrderID, o.OrderDate, o.DeliveryType, o.UserID, u.Name, u.Email
-             FROM Orders o JOIN Users u ON o.UserID=u.UserID
-            WHERE o.OrderID=%s""", (order_id,))
-    # Customers see only their own orders; staff see any. A missing order and
-    # someone else's order both give 404, so order numbers can't be probed.
-    if not order or (session.get("role") != "Staff" and order["UserID"] != session["user_id"]):
-        abort(404)
-    items = query_all(
-        """SELECT oi.BookID, b.Title, oi.Quantity, oi.Price,
-                  oi.Quantity * oi.Price AS LineTotal
-             FROM Order_Items oi JOIN Books b ON oi.BookID=b.BookID
-            WHERE oi.OrderID=%s ORDER BY b.Title""", (order_id,))
-    total = sum(item["LineTotal"] for item in items)
-    return render_template("order_detail.html", order=order, items=items, total=total)
-
-
 LOAN_SELECT = """SELECT l.LoanID, u.Name, b.Title, bc.Barcode, l.BorrowedDate, l.DueDate,
                         l.ReturnedDate, l.LoanStatus,
                         CASE WHEN l.LoanStatus = 'Returned' THEN l.LateFee
@@ -496,20 +476,6 @@ def add_copy(book_id):
                 raise
             flash(exc.msg, "error")
     return redirect(url_for("book_detail", book_id=book_id))
-
-
-@app.route("/admin/orders")
-@staff_required
-def admin_orders():
-    rows = query_all(
-        """SELECT o.OrderID, o.OrderDate, o.DeliveryType, u.Name,
-                  SUM(oi.Quantity * oi.Price) AS Total
-             FROM Orders o JOIN Users u ON o.UserID=u.UserID
-             JOIN Order_Items oi ON o.OrderID=oi.OrderID
-            GROUP BY o.OrderID, o.OrderDate, o.DeliveryType, u.Name
-            ORDER BY o.OrderDate DESC, o.OrderID DESC
-            LIMIT 200""")
-    return render_template("admin_orders.html", orders=rows)
 
 
 LOAN_FILTERS = {
