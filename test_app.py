@@ -156,6 +156,55 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(proc.call_args.args, ("LowStockReport", (5, "tiny stock")))
         self.assertIn(b"Tiny Stock", response.data)
 
+    def test_borrow_calls_procedure_and_shows_error(self):
+        client = self.client_as("Customer")
+        with patch.object(app, "call_procedure", return_value=[[{"NewLoanID": 9}]]) as proc:
+            response = client.post("/book/5/borrow", data={"csrf_token": "tok"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("BorrowBook", (1, 5)))
+        error = app.Error(msg="Return your overdue books before borrowing more", errno=1644)
+        with patch.object(app, "call_procedure", side_effect=error):
+            client.post("/book/5/borrow", data={"csrf_token": "tok"})
+        with client.session_transaction() as session:
+            self.assertIn("Return your overdue books before borrowing more", [m for _, m in session["_flashes"]])
+
+    def test_customer_return_passes_own_user_id(self):
+        client = self.client_as("Customer")
+        result = [[{"LoanID": 3, "DaysLate": 4, "LateFee": Decimal("1.00")}]]
+        with patch.object(app, "call_procedure", return_value=result) as proc:
+            response = client.post("/loan/3/return", data={"csrf_token": "tok"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(proc.call_args.args, ("ReturnBook", (3, 1)))
+        with client.session_transaction() as session:
+            self.assertIn("Book returned 4 day(s) late. Late fee: $1.00.", [m for _, m in session["_flashes"]])
+
+    def test_staff_return_uses_no_owner_and_loan_filter_is_whitelisted(self):
+        client = self.staff_client()
+        result = [[{"LoanID": 3, "DaysLate": 0, "LateFee": Decimal("0.00")}]]
+        with patch.object(app, "call_procedure", return_value=result) as proc:
+            client.post("/admin/loan/3/return", data={"csrf_token": "tok"})
+        self.assertEqual(proc.call_args.args, ("ReturnBook", (3, None)))
+        with patch.object(app, "call_procedure", return_value=[[{"MarkedLate": 0}]]) as proc, \
+             patch.object(app, "query_all", return_value=[]) as query:
+            response = client.get("/admin/loans?status=late;DROP")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(proc.call_args.args[0], "MarkOverdueLoans")
+        self.assertIn("l.LoanStatus IN ('On-Loan', 'Late')", query.call_args.args[0])
+        with patch.object(app, "call_procedure", return_value=[[{"MarkedLate": 0}]]), \
+             patch.object(app, "query_all", return_value=[]) as query:
+            client.get("/admin/loans?status=late")
+        self.assertIn("l.LoanStatus = 'Late'", query.call_args.args[0])
+
+    def test_loans_page_shows_fee_total(self):
+        client = self.client_as("Customer")
+        rows = [{"LoanID": 1, "Name": "T", "Title": "Late Book", "Barcode": "B1", "BorrowedDate": "2026-10-01",
+                 "DueDate": "2026-10-15", "ReturnedDate": None, "LoanStatus": "Late", "Fee": Decimal("1.50")}]
+        with patch.object(app, "call_procedure", return_value=[[{"MarkedLate": 0}]]), \
+             patch.object(app, "query_all", return_value=rows):
+            response = client.get("/loans")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Late fees: $1.50", response.data)
+
     def test_dbtest_is_staff_only(self):
         self.assertEqual(self.client_as(None).get("/dbtest").status_code, 302)
         self.assertEqual(self.client_as("Customer").get("/dbtest").status_code, 403)

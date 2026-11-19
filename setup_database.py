@@ -77,6 +77,7 @@ def apply_safe_migrations(conn):
         "ALTER TABLE Orders MODIFY OrderDate DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
         "ALTER TABLE Order_Items MODIFY Quantity SMALLINT UNSIGNED NOT NULL",
         "ALTER TABLE Order_Items MODIFY Price DECIMAL(10,2) NOT NULL",
+        "ALTER TABLE Loans ADD COLUMN LateFee DECIMAL(8,2) NOT NULL DEFAULT 0",
     ]
     for statement in migrations:
         try:
