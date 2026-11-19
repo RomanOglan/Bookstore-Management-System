@@ -43,10 +43,10 @@ CREATE TABLE IF NOT EXISTS Book_Copies (
 CREATE TABLE IF NOT EXISTS Users (
     UserID INT UNSIGNED AUTO_INCREMENT,
     Name VARCHAR(100),
-    Email VARCHAR(50) UNIQUE NOT NULL,
+    Email VARCHAR(150) UNIQUE NOT NULL,
     PasswordHash VARCHAR(250) NOT NULL,
-    Role ENUM ("Admin", "Users") NOT NULL,
-    AccountStatus ENUM ("Active", "Unactive") DEFAULT("Active") NOT NULL,
+    Role ENUM ("Staff", "Customer") NOT NULL,
+    AccountStatus ENUM ("Active", "Inactive") DEFAULT("Active") NOT NULL,
     PRIMARY KEY(UserID)
 );
 
