@@ -77,6 +77,92 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"already exists", response.data)
         self.assertEqual(proc.call_args.args[1][-1], "Some Author")
+    def client_as(self, role):
+        app.app.config.update(TESTING=True, SECRET_KEY="test")
+        client = app.app.test_client()
+        with client.session_transaction() as session:
+            session["csrf_token"] = "tok"
+            if role:
+                session.update(user_id=1, role=role, name="Tester")
+        return client
+
+    def test_dbtest_is_staff_only(self):
+        self.assertEqual(self.client_as(None).get("/dbtest").status_code, 302)
+        self.assertEqual(self.client_as("Customer").get("/dbtest").status_code, 403)
+        with patch.object(app, "query_one", return_value={"books": 3, "imported": 3}):
+            self.assertEqual(self.client_as("Staff").get("/dbtest").status_code, 200)
+
+    def test_only_customers_can_buy(self):
+        data = {"quantity": "0", "delivery": "Delivery", "csrf_token": "tok"}
+        self.assertEqual(self.client_as("Staff").post("/book/1/buy", data=data).status_code, 403)
+        self.assertEqual(self.client_as(None).post("/book/1/buy", data=data).status_code, 302)
+        # a customer is allowed through; quantity 0 is rejected before any database call
+        self.assertEqual(self.client_as("Customer").post("/book/1/buy", data=data).status_code, 302)
+
+    def test_register_rejects_bad_input_without_touching_database(self):
+        bad = [
+            {"name": "", "email": "a@b.com", "password": "longenough", "confirm": "longenough"},
+            {"name": "Ann", "email": "not-an-email", "password": "longenough", "confirm": "longenough"},
+            {"name": "Ann", "email": "a@b.com", "password": "short", "confirm": "short"},
+            {"name": "Ann", "email": "a@b.com", "password": "longenough", "confirm": "different1"},
+        ]
+        with patch.object(app, "get_connection", side_effect=AssertionError("database used")):
+            for form in bad:
+                response = self.client_as(None).post("/register", data={**form, "csrf_token": "tok"})
+                self.assertEqual(response.status_code, 200)
+
+    def test_register_creates_customer_with_hashed_password(self):
+        calls = []
+
+        class Cursor:
+            def execute(self, sql, params):
+                calls.append((sql, params))
+            def close(self):
+                pass
+
+        class Conn:
+            def cursor(self):
+                return Cursor()
+            def commit(self):
+                pass
+            def rollback(self):
+                pass
+            def close(self):
+                pass
+
+        client = self.client_as(None)
+        form = {"name": "Ann", "email": " Ann@Example.com ", "password": "longenough",
+                "confirm": "longenough", "csrf_token": "tok"}
+        with patch.object(app, "get_connection", return_value=Conn()):
+            response = client.post("/register", data=form)
+        self.assertEqual(response.status_code, 302)
+        sql, params = calls[0]
+        self.assertIn("'Customer'", sql)
+        self.assertEqual(params[1], "ann@example.com")
+        self.assertNotEqual(params[2], "longenough")
+
+    def test_register_duplicate_email_message(self):
+        class Cursor:
+            def execute(self, sql, params):
+                raise app.Error(msg="dup", errno=1062)
+            def close(self):
+                pass
+
+        class Conn:
+            def cursor(self):
+                return Cursor()
+            def rollback(self):
+                pass
+            def close(self):
+                pass
+
+        form = {"name": "Ann", "email": "a@b.com", "password": "longenough",
+                "confirm": "longenough", "csrf_token": "tok"}
+        with patch.object(app, "get_connection", return_value=Conn()):
+            response = self.client_as(None).post("/register", data=form)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"already registered", response.data)
+
 
 if __name__ == "__main__":
     unittest.main()
