@@ -1,1 +1,11 @@
-{% extends "base.html" %}{% block title %}Database status{% endblock %}{% block content %}<div class="panel narrow"><h1>Database connected</h1><p>Total book rows: <strong>{{ count }}</strong></p><p>Verified CSV rows: <strong>{{ imported }}</strong></p></div>{% endblock %}
+{% extends "base.html" %}
+{% block title %}
+  Database status
+{% endblock %}
+{% block content %}
+  <div class="panel narrow">
+    <h1>Database connected</h1>
+    <p>Total book rows: <strong>{{ count }}</strong></p>
+    <p>Verified CSV rows: <strong>{{ imported }}</strong></p>
+  </div>
+{% endblock %}
