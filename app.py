@@ -498,18 +498,59 @@ def add_copy(book_id):
     return redirect(url_for("book_detail", book_id=book_id))
 
 
+ORDER_PERIODS = {
+    "today": ("Today", "o.OrderDate >= CURDATE()"),
+    "week": ("Last 7 days", "o.OrderDate >= CURDATE() - INTERVAL 6 DAY"),
+    "month": ("Last 30 days", "o.OrderDate >= CURDATE() - INTERVAL 29 DAY"),
+    "all": ("All", "1 = 1"),
+}
+
+
 @app.route("/admin/orders")
 @staff_required
 def admin_orders():
+    period = request.args.get("period", "all")
+    if period not in ORDER_PERIODS:
+        period = "all"
+    search = " ".join(request.args.get("q", "").split())[:100]
+    delivery = request.args.get("delivery", "")
+    if delivery not in {"Delivery", "Pick-Up"}:
+        delivery = ""
+    page = max(request.args.get("page", 1, type=int), 1)
+    per_page = 50
+
+    where, params = [ORDER_PERIODS[period][1]], []
+    if search:
+        if search.lstrip("#").isdigit():
+            where.append("o.OrderID = %s")
+            params.append(int(search.lstrip("#")))
+        else:
+            where.append("(LOWER(u.Name) LIKE %s OR LOWER(u.Email) LIKE %s)")
+            params += [f"%{search.lower()}%"] * 2
+    if delivery:
+        where.append("o.DeliveryType = %s")
+        params.append(delivery)
+    clause = " WHERE " + " AND ".join(where)
+
+    summary = query_one(
+        """SELECT COUNT(DISTINCT o.OrderID) AS Orders,
+                  COALESCE(SUM(oi.Quantity), 0) AS Units,
+                  COALESCE(SUM(oi.Quantity * oi.Price), 0) AS Revenue
+             FROM Orders o JOIN Users u ON o.UserID=u.UserID
+             JOIN Order_Items oi ON o.OrderID=oi.OrderID""" + clause, params)
     rows = query_all(
-        """SELECT o.OrderID, o.OrderDate, o.DeliveryType, u.Name,
+        """SELECT o.OrderID, o.OrderDate, o.DeliveryType, u.Name, u.Email,
+                  SUM(oi.Quantity) AS Units,
                   SUM(oi.Quantity * oi.Price) AS Total
              FROM Orders o JOIN Users u ON o.UserID=u.UserID
-             JOIN Order_Items oi ON o.OrderID=oi.OrderID
-            GROUP BY o.OrderID, o.OrderDate, o.DeliveryType, u.Name
+             JOIN Order_Items oi ON o.OrderID=oi.OrderID""" + clause + """
+            GROUP BY o.OrderID, o.OrderDate, o.DeliveryType, u.Name, u.Email
             ORDER BY o.OrderDate DESC, o.OrderID DESC
-            LIMIT 200""")
-    return render_template("admin_orders.html", orders=rows)
+            LIMIT %s OFFSET %s""", [*params, per_page, (page - 1) * per_page])
+    return render_template("admin_orders.html", orders=rows, summary=summary,
+                           periods=ORDER_PERIODS, period=period, search=search,
+                           delivery=delivery, page=page,
+                           pages=max((summary["Orders"] + per_page - 1) // per_page, 1))
 
 
 LOAN_FILTERS = {

@@ -17,7 +17,7 @@
           {% if session.role == 'Staff' %}
             <a href="{{ url_for('admin_books') }}">Manage books</a>
             <a href="{{ url_for('admin_loans') }}">Manage loans</a>
-            <a href="{{ url_for('admin_orders') }}">All orders</a>
+            <a href="{{ url_for('admin_orders') }}">Manage orders</a>
           {% endif %}
           <span>{{ session.name }} ({{ session.role }})</span>
           <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="link-button">Sign out</button></form>

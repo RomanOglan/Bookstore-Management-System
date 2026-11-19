@@ -334,15 +334,36 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"customer@bookstore.local", response.data)
 
-    def test_all_orders_page_is_staff_only(self):
+    def test_manage_orders_page_is_staff_only(self):
         self.assertEqual(self.client_as("Customer").get("/admin/orders").status_code, 403)
         self.assertEqual(self.client_as(None).get("/admin/orders").status_code, 302)
         rows = [{"OrderID": 7, "OrderDate": "2026-11-19", "DeliveryType": "Pick-Up",
-                 "Name": "Demo Customer", "Total": Decimal("108.46")}]
-        with patch.object(app, "query_all", return_value=rows):
+                 "Name": "Demo Customer", "Email": "customer@bookstore.local",
+                 "Units": 2, "Total": Decimal("108.46")}]
+        summary = {"Orders": 1, "Units": 2, "Revenue": Decimal("108.46")}
+        with patch.object(app, "query_one", return_value=summary), \
+             patch.object(app, "query_all", return_value=rows):
             response = self.client_as("Staff").get("/admin/orders")
         self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Manage orders", response.data)
         self.assertIn(b"Demo Customer", response.data)
+
+    def test_manage_orders_filters_use_parameters(self):
+        summary = {"Orders": 0, "Units": 0, "Revenue": Decimal("0")}
+        with patch.object(app, "query_one", return_value=summary) as one, \
+             patch.object(app, "query_all", return_value=[]):
+            response = self.client_as("Staff").get("/admin/orders?period=week&q=Demo&delivery=Pick-Up")
+        self.assertEqual(response.status_code, 200)
+        sql, params = one.call_args.args
+        self.assertIn("INTERVAL 6 DAY", sql)
+        self.assertEqual(params, ["%demo%", "%demo%", "Pick-Up"])
+        self.assertNotIn("Demo", sql)
+        with patch.object(app, "query_one", return_value=summary) as one, \
+             patch.object(app, "query_all", return_value=[]):
+            self.client_as("Staff").get("/admin/orders?q=%2342&period=bogus")
+        sql, params = one.call_args.args
+        self.assertIn("o.OrderID = %s", sql)
+        self.assertEqual(params, [42])
 
 
 if __name__ == "__main__":
