@@ -53,6 +53,15 @@ class ValidationTests(unittest.TestCase):
             session.update(user_id=1, role="Staff", csrf_token="tok")
         return client
 
+    def test_staff_inventory_uses_search_procedure_with_paging(self):
+        client = self.staff_client()
+        with patch.object(app, "call_procedure", return_value=[[{"total": 120}], []]) as proc, \
+             patch.object(app, "query_all", return_value=[]):
+            response = client.get("/admin/books?q=  dune  &page=2")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(proc.call_args.args, ("SearchBooks", ("dune", None, 50, 50)))
+        self.assertIn(b"Page 2 of 3", response.data)
+
     def test_restock_calls_procedure(self):
         client = self.staff_client()
         with patch.object(app, "call_procedure", return_value=[[{"NewQuantity": 12}]]) as proc:

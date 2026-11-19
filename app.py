@@ -331,8 +331,17 @@ def loans():
 @app.route("/admin/books")
 @staff_required
 def admin_books():
-    books = query_all("SELECT BookID, ISBN, Title, Price, Quantity FROM Books ORDER BY Title LIMIT 200")
-    return render_template("admin_books.html", books=books)
+    search = " ".join(request.args.get("q", "").split())[:100]
+    category = request.args.get("category", type=int)
+    page = max(request.args.get("page", 1, type=int), 1)
+    per_page = 50
+    results = call_procedure("SearchBooks", (search, category, per_page, (page - 1) * per_page))
+    count = results[0][0]["total"]
+    books = results[1] if len(results) > 1 else []
+    categories = query_all("SELECT CategoryID, CategoryName FROM Category ORDER BY CategoryName")
+    return render_template("admin_books.html", books=books, categories=categories, total=count,
+                           page=page, pages=max((count + per_page - 1) // per_page, 1),
+                           search=search, selected_category=category)
 
 
 @app.route("/admin/book/new", methods=["GET", "POST"])
