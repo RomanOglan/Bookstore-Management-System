@@ -1,80 +1,46 @@
-[Download the Discord-ready text file](</C:/Users/tahah/Documents/Codex/2026-11-19/ok-i-need-u-to-do/outputs/Discord-Group-Setup-Instructions.txt>)
+# Bookstore / Library Database (COMP-4150)
 
-BOOKSTORE PROJECT — GROUP SETUP
+A website where customers can buy and borrow books and staff can manage the books, orders and loans. Built with Flask and MySQL 8.
 
-The completed project is now on the main GitHub branch.
+## How to run it
 
-FIRST-TIME SETUP
+You need Python 3, Git and MySQL 8 installed, and MySQL has to be running.
 
-1. Make sure Python, Git, MySQL 8.0, and VS Code are installed.
+1. Clone the repo and go into the folder.
+2. Make a virtual environment and install the packages.
+   - Mac: `python3 -m venv venv`, then `source venv/bin/activate`
+   - Windows: `py -m venv venv`, then `.\venv\Scripts\Activate.ps1`
+   - Then: `pip install -r requirements.txt`
+3. Copy `.env.example` to `.env` and put in your own MySQL user and password. Don't commit `.env`.
+4. Set up the database: `python3 setup_database.py`
+5. Run the tests: `python3 -m unittest -v`
+6. Start the app: `python3 app.py` and open http://127.0.0.1:5001
 
-2. Open PowerShell and run:
+Everyone has their own local database, so after every `git pull` run `python3 setup_database.py` again. It's safe to re-run because it doesn't delete any data. It builds the tables, loads about 1,000 books from `bookstore.csv`, adds demo stock and demo copies for borrowing, installs the stored procedures and triggers, and creates the demo logins. (Only use `--reset` if you really want to wipe your database.)
 
-cd "$HOME\Documents"
-git clone https://github.com/RomanOglan/Bookstore-Management-System.git
-cd .\Bookstore-Management-System
-code .
+Demo logins:
+- Customer: `customer@bookstore.local` / `Customer123!`
+- Staff: `staff@bookstore.local` / `Staff123!`
 
-3. Create the Python environment:
+## What it does
 
-py -m venv venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+**Customers** can search the catalog (by title, author or ISBN, with a category filter), buy books, borrow books for 14 days, return them, see their orders and loans, and see any late fees. New customers can register on the site.
 
-4. Create your private MySQL settings:
+**Staff** can add, edit and delete books, restock, add lendable copies, see a low stock list, see all orders (with filters), and see and return loans (overdue ones are highlighted).
 
-Copy-Item .env.example .env
-notepad .env
+Late fees are $0.25 per day. A patron can have at most 5 loans at once and can't borrow if they have an overdue book.
 
-Enter your own local MySQL username and password in `.env`. Save it and never upload `.env` to GitHub.
+## How it works
 
-5. Make sure MySQL is running, then run:
+- `app.py` is the Flask app. Customer and Staff access is checked in the code.
+- `bookstore.sql` has the tables, and `setup_database.py` runs everything.
+- Most of the work is done in stored procedures (`stored_procedures.sql`) that the app calls: `SearchBooks`, `PlaceOrder`, `BorrowBook`, `ReturnBook`, `MarkOverdueLoans`, `AddBook`, `UpdateBook`, `DeleteBook`, `RestockBook`, `AddBookCopy` and `LowStockReport`. They check the input and use transactions, so a failed step undoes everything. The app shows their error messages to the user.
+- Triggers (`triggers.sql`): `ValidateOrderItem` (no bad quantities or prices), `ValidateLoanDates` (due date can't be before the borrow date), `BlockLoanReopen` (a returned loan can't be reopened) and `FreeCopyOnReturn` (the copy becomes available when a loan is returned).
+- `backend_queries.sql` has the reporting queries: overdue loans, low stock, sales by category, top sellers and a customer's order history.
+- `performance_tests.sql`, `load_test.py` and `Project Documentation/performance.md` have the EXPLAIN results and load tests.
+- `roles.sql` sets up database roles for customers and staff. The app itself connects as one MySQL user and checks roles in the code, so these roles are just the design we documented. Run it as root after `setup_database.py`.
+- `test_data.sql` is optional extra sample data and isn't loaded by the setup script.
 
-python setup_database.py
+## Team
 
-6. Test and start the website:
-
-python -m unittest -v
-python app.py
-
-Open:
-
-http://127.0.0.1:5001
-http://127.0.0.1:5001/dbtest
-
-Demo customer:
-customer@bookstore.local
-Customer123!
-
-Demo staff:
-staff@bookstore.local
-Staff123!
-
-ALREADY CLONED THE PROJECT?
-
-Open PowerShell in your existing project folder and run:
-
-git status
-git pull --ff-only origin main
-.\venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python setup_database.py
-python -m unittest -v
-python app.py
-
-IMPORTANT
-
-- Everyone has a separate local MySQL database.
-- Git updates project files, but it does not synchronize live database changes.
-- Never commit `.env`, `venv`, database backups, or private user data.
-- Check `git status` before pulling. Save unfinished work on your own branch first.
-- Do not use the database reset command unless you intentionally want to delete and rebuild your local database.
-
-## Orders, reports, and database roles
-
-- Customers buy through the `PlaceOrder` stored procedure. They then land on the order's page at `/orders/<id>`, which shows the books, quantities, prices at purchase, and the total.
-- Customers can open only their own orders. Staff can see every order at `/admin/orders`.
-- `backend_queries.sql` has the reporting queries: overdue loans, low stock, sales by category, top sellers, and one customer's order history.
-- `performance_tests.sql` and `python load_test.py search|orders` produce the evidence in `Project Documentation/performance.md`.
-- `roles.sql` defines the `bookstore_customer` and `bookstore_staff` database roles, plus two demo users. Run it as root after `python setup_database.py`, and run it again after every setup, because setup re-creates the procedures. **The Flask app connects as one database user and enforces the Customer/Staff roles in code. These database roles are the documented design and are used in the demo; the app does not use them.**
+Roman (books, login and roles, loans), plus two teammates (orders, reports and performance testing).
