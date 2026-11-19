@@ -43,4 +43,7 @@ Late fees are $0.25 per day. A patron can have at most 5 loans at once and can't
 
 ## Team
 
-Roman (books, login and roles, loans), plus two teammates (orders, reports and performance testing).
+- Mona Hicham Moussa
+- Roman Oglan
+- Taha Hammoud
+- Stefan Bratic
