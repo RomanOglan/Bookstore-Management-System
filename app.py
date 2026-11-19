@@ -240,35 +240,33 @@ def buy_book(book_id):
         delivery = request.form.get("delivery")
         if delivery not in {"Delivery", "Pick-Up"}:
             raise ValueError("Choose Delivery or Pick-Up.")
+        # PlaceOrder locks the book row, checks stock, records the price at purchase,
+        # lowers the stock and commits, all in one transaction.
+        result = call_procedure("PlaceOrder", (session["user_id"], book_id, quantity, delivery))
+        order_id = result[0][0]["NewOrderID"]
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(url_for("book_detail", book_id=book_id))
+    except Error as exc:
+        if exc.errno != 1644:
+            raise
+        flash(order_error_message(exc.msg, book_id, quantity), "error")
+        return redirect(url_for("book_detail", book_id=book_id))
+    flash(f"Order #{order_id} placed.", "success")
+    return redirect(url_for("order_detail", order_id=order_id))
 
-    conn = get_connection()
-    try:
-        cur = conn.cursor(dictionary=True)
-        conn.start_transaction()
-        cur.execute("SELECT Price, Quantity FROM Books WHERE BookID=%s FOR UPDATE", (book_id,))
-        book = cur.fetchone()
-        if not book or book["Quantity"] is None or book["Quantity"] < quantity:
-            raise ValueError("That quantity is not available for purchase.")
-        cur.execute("INSERT INTO Orders (DeliveryType, UserID) VALUES (%s, %s)", (delivery, session["user_id"]))
-        order_id = cur.lastrowid
-        cur.execute("INSERT INTO Order_Items (BookID, OrderID, Quantity, Price) VALUES (%s,%s,%s,%s)",
-                    (book_id, order_id, quantity, book["Price"]))
-        cur.execute("UPDATE Books SET Quantity=Quantity-%s WHERE BookID=%s", (quantity, book_id))
-        conn.commit()
-        flash(f"Order #{order_id} placed.", "success")
-    except ValueError as exc:
-        conn.rollback()
-        flash(str(exc), "error")
-    except Error:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-        conn.close()
-    return redirect(url_for("book_detail", book_id=book_id))
+
+def order_error_message(message, book_id, quantity):
+    """Make PlaceOrder's out-of-stock error say how many copies are left."""
+    if message != "Book unavailable or insufficient stock":
+        return message
+    book = query_one("SELECT Title, Quantity FROM Books WHERE BookID=%s", (book_id,))
+    if not book or book["Quantity"] is None:
+        return "That book is not available for purchase."
+    if book["Quantity"] == 0:
+        return f"Sorry, {book['Title']} is out of stock."
+    return (f"Only {book['Quantity']} of {book['Title']} left in stock, "
+            f"but you asked for {quantity}.")
 
 
 @app.post("/book/<int:book_id>/borrow")
@@ -312,8 +310,28 @@ def orders():
                   SUM(oi.Quantity * oi.Price) AS Total
              FROM Orders o JOIN Order_Items oi ON o.OrderID=oi.OrderID
             WHERE o.UserID=%s GROUP BY o.OrderID, o.OrderDate, o.DeliveryType
-            ORDER BY o.OrderDate DESC""", (session["user_id"],))
+            ORDER BY o.OrderDate DESC, o.OrderID DESC""", (session["user_id"],))
     return render_template("orders.html", orders=rows)
+
+
+@app.route("/orders/<int:order_id>")
+@login_required
+def order_detail(order_id):
+    order = query_one(
+        """SELECT o.OrderID, o.OrderDate, o.DeliveryType, o.UserID, u.Name, u.Email
+             FROM Orders o JOIN Users u ON o.UserID=u.UserID
+            WHERE o.OrderID=%s""", (order_id,))
+    # Customers see only their own orders; staff see any. A missing order and
+    # someone else's order both give 404, so order numbers can't be probed.
+    if not order or (session.get("role") != "Staff" and order["UserID"] != session["user_id"]):
+        abort(404)
+    items = query_all(
+        """SELECT oi.BookID, b.Title, oi.Quantity, oi.Price,
+                  oi.Quantity * oi.Price AS LineTotal
+             FROM Order_Items oi JOIN Books b ON oi.BookID=b.BookID
+            WHERE oi.OrderID=%s ORDER BY b.Title""", (order_id,))
+    total = sum(item["LineTotal"] for item in items)
+    return render_template("order_detail.html", order=order, items=items, total=total)
 
 
 @app.route("/loans")
@@ -437,6 +455,20 @@ def add_copy(book_id):
         finally:
             conn.close()
     return redirect(url_for("book_detail", book_id=book_id))
+
+
+@app.route("/admin/orders")
+@staff_required
+def admin_orders():
+    rows = query_all(
+        """SELECT o.OrderID, o.OrderDate, o.DeliveryType, u.Name,
+                  SUM(oi.Quantity * oi.Price) AS Total
+             FROM Orders o JOIN Users u ON o.UserID=u.UserID
+             JOIN Order_Items oi ON o.OrderID=oi.OrderID
+            GROUP BY o.OrderID, o.OrderDate, o.DeliveryType, u.Name
+            ORDER BY o.OrderDate DESC, o.OrderID DESC
+            LIMIT 200""")
+    return render_template("admin_orders.html", orders=rows)
 
 
 @app.route("/admin/loans")

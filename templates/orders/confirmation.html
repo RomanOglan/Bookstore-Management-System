@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Order #{{ order.OrderID }} confirmed{% endblock %}
+{% block content %}
+<div class="panel confirm">
+  <p class="eyebrow">Order confirmed</p>
+  <h1>Thank you, {{ order.Name }}!</h1>
+  <p>Your order <strong>#{{ order.OrderID }}</strong> was placed on {{ order.OrderDate.strftime('%B %d, %Y at %I:%M %p') if order.OrderDate.strftime is defined else order.OrderDate }}.</p>
+  <p>
+    {% if order.DeliveryType == 'Delivery' %}
+      We'll ship it to the address on your account. A confirmation was recorded for {{ order.Email }}.
+    {% else %}
+      Your order is set for <strong>Pick-Up</strong>. Bring order number <strong>#{{ order.OrderID }}</strong> to the front desk.
+    {% endif %}
+  </p>
+  {% include "orders/_items.html" %}
+  <div class="actions">
+    <a class="button" href="{{ url_for('orders.history') }}">View my orders</a>
+    <a href="{{ url_for('home') }}">Continue shopping</a>
+  </div>
+</div>
+{% endblock %}
