@@ -85,6 +85,34 @@ def apply_safe_migrations(conn):
         except Exception as exc:
             if getattr(exc, "errno", None) not in {1060, 1061, 1091}:
                 raise
+
+    cur.execute(
+        """SELECT CategoryName, MIN(CategoryID)
+           FROM Category GROUP BY CategoryName HAVING COUNT(*) > 1"""
+    )
+    for name, keep_id in cur.fetchall():
+        cur.execute(
+            "SELECT CategoryID FROM Category WHERE CategoryName=%s AND CategoryID<>%s",
+            (name, keep_id),
+        )
+        duplicate_ids = [row[0] for row in cur.fetchall()]
+        placeholders = ",".join(["%s"] * len(duplicate_ids))
+        cur.execute(
+            f"UPDATE Books SET CategoryID=%s WHERE CategoryID IN ({placeholders})",
+            (keep_id, *duplicate_ids),
+        )
+        cur.execute(
+            f"DELETE FROM Category WHERE CategoryID IN ({placeholders})",
+            duplicate_ids,
+        )
+
+    cur.execute("SHOW INDEX FROM Category WHERE Non_unique=0 AND Column_name='CategoryName'")
+    if not cur.fetchone():
+        cur.execute("ALTER TABLE Category ADD UNIQUE INDEX uq_category_name (CategoryName)")
+    cur.execute("SELECT COUNT(*), COUNT(DISTINCT CategoryName) FROM Category")
+    category_rows, distinct_names = cur.fetchone()
+    if category_rows != distinct_names:
+        raise RuntimeError("Category migration failed: duplicate names remain")
     conn.commit()
     cur.close()
 
